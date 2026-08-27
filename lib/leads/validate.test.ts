@@ -30,4 +30,17 @@ describe("validateLead", () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it("accepts a guide lead without organisation", () => {
+    const result = validateLead({
+      type: "guide",
+      name: "Priya Shah",
+      email: "priya@startup.test",
+      phone: "9876543210",
+      sizeBand: "50-500",
+      role: "who=c;notice=b;affected=b;success=b",
+      preferredTime: "training",
+    });
+    expect(result.ok).toBe(true);
+  });
 });

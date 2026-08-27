@@ -1,4 +1,4 @@
-export const LEAD_TYPES = ["discovery", "counselling", "popup", "demo"] as const;
+export const LEAD_TYPES = ["discovery", "counselling", "popup", "demo", "guide"] as const;
 export type LeadType = (typeof LEAD_TYPES)[number];
 
 export const SIZE_BANDS = ["1-49", "50-500", "501-2000", "2000+"] as const;

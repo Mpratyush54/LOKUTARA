@@ -1,34 +1,15 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { OFFERINGS, PILLARS, PRICING, BOOKING_STEPS, tierForHeadcount } from "@/lib/landing/content";
+import { ABOUT_POINTS, AUDIENCE, OFFERINGS, PILLARS, PRICING, BOOKING_STEPS, tierForHeadcount } from "@/lib/landing/content";
+import { NeedGuide } from "@/components/landing/NeedGuide";
+import { PilotSteps } from "@/components/landing/PilotSteps";
 import { experimentFor, loadExperimentConfigs, submitLead, track } from "@/lib/tracking/client";
-import { useCountUp, useReveal } from "@/hooks/useMotion";
-
-const AUDIENCE = [
-  {
-    id: "hr",
-    title: "HR & people leads",
-    copy: "A paid custom pilot: discovery, a workshop shaped to the team, participant feedback, and an employer summary.",
-    detail: "You stay the buyer. We do not ask employees to self-serve an EAP app at launch.",
-  },
-  {
-    id: "founders",
-    title: "Founders without HR",
-    copy: "The same discovery call. A narrower workshop if the company is still small.",
-    detail: "Useful when there is no dedicated people lead and the founder is the economic buyer.",
-  },
-  {
-    id: "employees",
-    title: "Individuals",
-    copy: "Confidential, non-emergency counselling. Crisis and emergency care are referred out.",
-    detail: "Session topics are not reported to your employer. This site is not an emergency line.",
-  },
-] as const;
+import { useReveal } from "@/hooks/useMotion";
 
 const RADIAL = ["Discovery", "Workshop", "Counselling", "Employer summary", "Community later", "Assessment later"];
 
-type FormType = "discovery" | "counselling" | "popup";
+type FormType = "discovery" | "counselling" | "popup" | "question";
 
 function RevealSection({
   id,
@@ -62,7 +43,6 @@ export function LandingExperience() {
     { from: "bot", text: "Hello. Are you looking for a company discovery call, or individual counselling?" },
   ]);
   const [chatInput, setChatInput] = useState("");
-  const [counted, setCounted] = useState(false);
   const [ctaLabel, setCtaLabel] = useState("Book a discovery call");
   const [navOpen, setNavOpen] = useState(false);
   const [navScrolled, setNavScrolled] = useState(false);
@@ -75,10 +55,6 @@ export function LandingExperience() {
     () => Array.from({ length: 24 }, (_, i) => ({ left: i * 4.2 + 1, height: 25 + ((i * 17) % 55), delay: (i % 7) * 0.2 })),
     [],
   );
-  const countDiscovery = useCountUp(45, counted);
-  const countPrice = useCountUp(1200, counted);
-  const countPros = useCountUp(4, counted);
-
   useEffect(() => {
     void (async () => {
       await loadExperimentConfigs();
@@ -99,10 +75,6 @@ export function LandingExperience() {
     const id = window.setInterval(() => setPhone((p) => (p + 1) % BOOKING_STEPS.length), 4500);
     return () => window.clearInterval(id);
   }, [phonePaused]);
-
-  useEffect(() => {
-    if (outcomesReveal.visible) setCounted(true);
-  }, [outcomesReveal.visible]);
 
   useEffect(() => {
     const reduce =
@@ -260,18 +232,19 @@ export function LandingExperience() {
 
         <RevealSection id="audience">
           <div className="container stack" style={{ gap: 40 }}>
-            <div style={{ maxWidth: "42ch" }}>
+            <div style={{ maxWidth: "28ch" }}>
               <p className="eyebrow" style={{ color: "var(--forest)" }}>
-                Built for the buyer in the room
+                Who we work with
               </p>
-              <h2>One process. Three ways in.</h2>
+              <h2>One team. Four ways we can help</h2>
             </div>
             <div className="audience-tabs">
               {AUDIENCE.map((tab, i) => (
                 <button
                   key={tab.id}
                   type="button"
-                  className={`audience-tab reveal-delay-${i + 1}${audience === i ? " active" : ""}`}
+                  className={`audience-tab reveal-delay-${(i % 4) + 1}${audience === i ? " active" : ""}`}
+                  aria-pressed={audience === i}
                   onMouseEnter={() => setAudience(i)}
                   onFocus={() => setAudience(i)}
                   onClick={() => setAudience(i)}
@@ -281,9 +254,31 @@ export function LandingExperience() {
                 </button>
               ))}
             </div>
-            <p className="meta audience-detail" key={audience}>
-              {AUDIENCE[audience].detail}
-            </p>
+            <div className="audience-detail" key={audience}>
+              <p className="meta">{AUDIENCE[audience].detail}</p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => openForm(AUDIENCE[audience].form)}
+              >
+                {AUDIENCE[audience].cta}
+              </button>
+            </div>
+          </div>
+        </RevealSection>
+
+        <RevealSection id="guide">
+          <div className="container stack" style={{ gap: 32 }}>
+            <div style={{ maxWidth: "22ch" }}>
+              <p className="eyebrow" style={{ color: "var(--forest)" }}>
+                If the four doors are not obvious
+              </p>
+              <h2>Not sure what you need? Let’s figure it out.</h2>
+            </div>
+            <NeedGuide
+              onBookDiscovery={() => openForm("discovery")}
+              onAskPsychologist={() => openForm("question")}
+            />
           </div>
         </RevealSection>
 
@@ -359,45 +354,34 @@ export function LandingExperience() {
 
         <RevealSection className="guarantee-band" id="pilot">
           <div className="container guarantee-inner">
-            <div />
-            <div style={{ textAlign: "center" }}>
-              <p className="eyebrow">How a pilot works</p>
-              <div className="guarantee-num num">4 steps</div>
-            </div>
-            <div>
-              <h2 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(28px, 4vw, 40px)" }}>
-                Discovery, then a paid workshop, then feedback.
-              </h2>
-              <p className="lead" style={{ marginTop: 16 }}>
-                Complimentary 30–45 min call. Tailored 2–3 hour or full-day session. Participant feedback. Employer
-                summary — no counselling content in that report.
-              </p>
-            </div>
+            <PilotSteps />
           </div>
         </RevealSection>
 
         <section
           ref={outcomesReveal.ref}
           className={`section ${outcomesReveal.className}`}
-          id="outcomes"
+          id="about"
         >
           <div className="container">
-            <div className={`outcomes-stage stack${counted ? " is-live" : ""}`} style={{ gap: 48 }}>
+            <div className={`outcomes-stage stack${outcomesReveal.visible ? " is-live" : ""}`} style={{ gap: 48 }}>
               <div style={{ maxWidth: "44ch" }}>
-                <p className="eyebrow">What we can stand behind today</p>
-                <h2>Facts of the practice. Not borrowed EAP scores.</h2>
-                <p className="lead">Numbers below are the launch offer, not outcome claims from unpaid pilots.</p>
+                <p className="eyebrow">About the practice</p>
+                <h2>Who is behind the work, and how it stays responsible.</h2>
               </div>
-              <div className="grid-3">
-                <StatCard value={countDiscovery} unit="min" label="Maximum length of the complimentary discovery call." />
-                <StatCard value={countPrice} unit="₹" label="Individual counselling, 60 minutes." prefix />
-                <StatCard value={countPros} unit="" label="Psychology professionals available for direct counselling." />
-              </div>
-              <div className="donut-row-wow">
-                <Donut pct={counted ? 100 : 0} label="Build live" caption="Workshops and manager programmes" />
-                <Donut pct={counted ? 100 : 0} label="Support live" caption="Individual and group counselling" />
-                <Donut pct={counted ? 20 : 0} label="Connect & Measure" caption="In design over the next six months" />
-              </div>
+              <ol className="about-grid">
+                {ABOUT_POINTS.map((point, index) => (
+                  <li key={point.id} className="about-card">
+                    <p className="about-index num">{String(index + 1).padStart(2, "0")}</p>
+                    <h3>{point.title}</h3>
+                    {point.copy ? (
+                      <p>{point.copy}</p>
+                    ) : (
+                      <p className="about-pending">Copy coming next.</p>
+                    )}
+                  </li>
+                ))}
+              </ol>
             </div>
           </div>
         </section>
@@ -774,41 +758,12 @@ export function LandingExperience() {
   );
 }
 
-function StatCard({ value, unit, label, prefix }: { value: number; unit: string; label: string; prefix?: boolean }) {
-  return (
-    <div className="stat-card-wow">
-      <div className="stat-num num">
-        {prefix ? unit : null}
-        {value}
-        {!prefix && unit ? <span style={{ fontSize: "0.45em", marginLeft: 4 }}>{unit}</span> : null}
-      </div>
-      <p className="stat-label">{label}</p>
-    </div>
-  );
-}
-
-function Donut({ pct, label, caption }: { pct: number; label: string; caption: string }) {
-  const circ = 414.7;
-  const offset = circ - (circ * pct) / 100;
-  return (
-    <div className="donut-card">
-      <div className="donut-svg-wrap">
-        <svg className="donut" viewBox="0 0 160 160" aria-hidden="true">
-          <circle className="donut-bg" cx="80" cy="80" r="66" />
-          <circle className="donut-fill" cx="80" cy="80" r="66" strokeDasharray={circ} strokeDashoffset={offset} />
-        </svg>
-        <span className="donut-pct num">{pct}%</span>
-      </div>
-      <span className="donut-label">{label}</span>
-      <span className="donut-caption">{caption}</span>
-    </div>
-  );
-}
-
 function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
   const [error, setError] = useState("");
   const [ok, setOk] = useState(false);
-  const isCounselling = type === "counselling";
+  const isQuestion = type === "question";
+  const isPersonal = type === "counselling" || isQuestion;
+  const leadType = type === "popup" ? "discovery" : isQuestion ? "counselling" : type;
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -816,7 +771,7 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
     const data = new FormData(e.currentTarget);
     try {
       await submitLead({
-        type: type === "popup" ? "discovery" : type,
+        type: leadType,
         name: data.get("name"),
         email: data.get("email"),
         phone: data.get("phone"),
@@ -825,7 +780,7 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
         sizeBand: data.get("sizeBand"),
         preferredTime: data.get("preferredTime"),
       });
-      await track("lead_submitted", { type: isCounselling ? "counselling" : "discovery" });
+      await track("lead_submitted", { type: isPersonal ? "counselling" : "discovery" });
       if (type === "popup") await track("popup_submitted");
       setOk(true);
     } catch (err) {
@@ -839,11 +794,13 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
         <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
           ×
         </button>
-        <h2>{isCounselling ? "Request counselling" : "Discovery call"}</h2>
+        <h2>{isQuestion ? "Ask a psychologist" : isPersonal ? "Request counselling" : "Discovery call"}</h2>
         <p className="meta" style={{ margin: "8px 0 20px" }}>
-          {isCounselling
-            ? "Non-emergency only. Do not write clinical details here."
-            : "30–45 minutes with the founders. Complimentary."}
+          {isQuestion
+            ? "A psychologist will reply. Crisis and emergency care are referred out. Do not write clinical details here."
+            : isPersonal
+              ? "Non-emergency only. Do not write clinical details here."
+              : "30–45 minutes with the founders. Complimentary."}
         </p>
         {ok ? (
           <p className="form-ok">Received. Joel or Divya will reply.</p>
@@ -855,14 +812,14 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
               <input className="input" id="name" name="name" required />
             </div>
             <div className="field">
-              <label htmlFor="email">Work email</label>
+              <label htmlFor="email">{isPersonal ? "Email" : "Work email"}</label>
               <input className="input" id="email" name="email" type="email" required />
             </div>
             <div className="field">
               <label htmlFor="phone">Phone</label>
               <input className="input" id="phone" name="phone" required />
             </div>
-            {isCounselling ? (
+            {isPersonal ? (
               <div className="field">
                 <label htmlFor="preferredTime">Preferred time</label>
                 <input className="input" id="preferredTime" name="preferredTime" />
