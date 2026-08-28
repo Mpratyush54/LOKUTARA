@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { COMMUNITY_TAG_GROUPS, COMMUNITY_TAGS, relativeDay } from "@/lib/product/workspace";
-import { jsonFetch } from "./AppShell";
+import type { CommunityRole } from "@/lib/access/billing";
+import { COMMUNITY_REPLY_RULES, COMMUNITY_TAG_GROUPS, COMMUNITY_TAGS, relativeDay } from "@/lib/product/workspace";
+import { jsonFetch, useAppAccount } from "./AppShell";
 
 export type ThreadView = {
   id: string;
@@ -22,6 +23,12 @@ export type ThreadView = {
     upvotes: number;
     upvotedBy: string[];
   }>;
+};
+
+export type ReplyPolicy = {
+  role: CommunityRole;
+  canReply: boolean;
+  rules: typeof COMMUNITY_REPLY_RULES;
 };
 
 function QuestionCard({ thread }: { thread: ThreadView }) {
@@ -57,8 +64,47 @@ function QuestionCard({ thread }: { thread: ThreadView }) {
   );
 }
 
+export function CommunityRules({
+  role,
+  compact,
+}: {
+  role?: CommunityRole;
+  compact?: boolean;
+}) {
+  return (
+    <aside className={`community-rules${compact ? " is-compact" : ""}`} aria-labelledby="reply-rules-title">
+      <div className="community-rules-head">
+        <h2 id="reply-rules-title">Who can reply</h2>
+        {role ? (
+          <p className="meta">
+            Your role: <strong>{role}</strong>
+          </p>
+        ) : null}
+      </div>
+      <ul>
+        {COMMUNITY_REPLY_RULES.map((rule) => (
+          <li key={rule.who} className={rule.canReply ? "is-allowed" : "is-blocked"}>
+            <span className={rule.canReply ? "status-pill is-answered" : "status-pill is-pending"}>
+              {rule.canReply ? "Can answer" : "Cannot answer"}
+            </span>
+            <div>
+              <strong>{rule.who}</strong>
+              <p>{rule.detail}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="meta">
+        Unanswered threads stay Pending until a specialist or admin replies. Answered threads stay open for further specialist replies. Students may ask and upvote, not answer.
+      </p>
+    </aside>
+  );
+}
+
 export function CommunityExplore() {
+  const account = useAppAccount();
   const [threads, setThreads] = useState<ThreadView[]>([]);
+  const [policy, setPolicy] = useState<ReplyPolicy | null>(null);
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("");
   const [sort, setSort] = useState<"latest" | "unanswered">("latest");
@@ -82,6 +128,7 @@ export function CommunityExplore() {
       return;
     }
     setThreads(body.threads || []);
+    if (body.replyPolicy) setPolicy(body.replyPolicy as ReplyPolicy);
     setReady(true);
   }
 
@@ -101,9 +148,11 @@ export function CommunityExplore() {
     );
   }
 
+  const role = policy?.role ?? account?.communityRole ?? "student";
+
   return (
     <div className="module-stack">
-      <header className="row-between">
+      <header className="community-head">
         <div>
           <p className="eyebrow">Connect</p>
           <h1>Explore</h1>
@@ -115,6 +164,7 @@ export function CommunityExplore() {
           Ask a question
         </Link>
       </header>
+      <CommunityRules role={role} />
       <form
         className="community-filters"
         onSubmit={(ev) => {
@@ -178,6 +228,7 @@ export function CommunityExplore() {
 }
 
 export function AskThread() {
+  const account = useAppAccount();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -214,6 +265,7 @@ export function AskThread() {
       <p className="eyebrow">Ask</p>
       <h1>Ask a question</h1>
       <p className="lead">Get help from people in this workspace — same dashboard, not a second forum login.</p>
+      <CommunityRules role={account?.communityRole ?? "student"} compact />
       <label className="admin-field">
         <span className="meta">Question title</span>
         <input
@@ -261,13 +313,16 @@ export function AskThread() {
 }
 
 export function ThreadDetail({ id }: { id: string }) {
+  const account = useAppAccount();
   const [thread, setThread] = useState<ThreadView | null>(null);
+  const [policy, setPolicy] = useState<ReplyPolicy | null>(null);
   const [me, setMe] = useState<string | null>(null);
   const [reply, setReply] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const answers = useMemo(() => thread?.answers || [], [thread]);
+  const pending = (thread?.answerCount ?? answers.length) === 0;
 
   useEffect(() => {
     void (async () => {
@@ -280,6 +335,7 @@ export function ThreadDetail({ id }: { id: string }) {
         return;
       }
       setThread(body.thread);
+      if (body.replyPolicy) setPolicy(body.replyPolicy as ReplyPolicy);
       setMe(session.body.account?.id ?? null);
     })();
   }, [id]);
@@ -315,13 +371,21 @@ export function ThreadDetail({ id }: { id: string }) {
   if (error && !thread) return <p className="app-error">{error}</p>;
   if (!thread) return <p className="meta">Opening thread…</p>;
 
+  const role = policy?.role ?? account?.communityRole ?? "student";
+  const canReply = policy?.canReply ?? (role === "specialist" || role === "admin");
+
   return (
-    <article className="module-stack">
+    <article className="module-stack thread-detail">
       <Link href="/app/community" className="btn btn-ghost">
         Back to explore
       </Link>
       <div className="question-hero">
-        <h1>{thread.title}</h1>
+        <div className="question-hero-top">
+          <h1>{thread.title}</h1>
+          <span className={pending ? "status-pill is-pending" : "status-pill is-answered"}>
+            {pending ? "Pending" : "Answered"}
+          </span>
+        </div>
         <div className="tag-row">
           {thread.tags.map((tag) => (
             <span key={tag} className="tag is-on">
@@ -334,42 +398,71 @@ export function ThreadDetail({ id }: { id: string }) {
         </p>
         <p className="thread-body">{thread.body}</p>
       </div>
-      <h2 className="admin-h2">{answers.length} {answers.length === 1 ? "answer" : "answers"}</h2>
-      <ul className="answer-list">
-        {answers.map((answer) => {
-          const liked = me ? answer.upvotedBy?.includes(me) : false;
-          return (
-            <li key={answer.id} className="answer-card">
-              <button
-                type="button"
-                className={liked ? "upvote is-on" : "upvote"}
-                onClick={() => void upvote(answer.id)}
-                aria-pressed={liked}
-                aria-label="Upvote answer"
-              >
-                <span aria-hidden="true">▲</span>
-                <span className="num">{answer.upvotes ?? 0}</span>
+      <CommunityRules role={role} />
+      <section className="answer-section">
+        <h2 className="admin-h2">{answers.length} {answers.length === 1 ? "answer" : "answers"}</h2>
+        {!answers.length ? (
+          <p className="answer-empty">No answers yet. Specialists and admins can be the first to reply.</p>
+        ) : (
+          <ul className="answer-list">
+            {answers.map((answer) => {
+              const liked = me ? answer.upvotedBy?.includes(me) : false;
+              return (
+                <li key={answer.id}>
+                  <article className="answer-card">
+                    <button
+                      type="button"
+                      className={liked ? "upvote is-on" : "upvote"}
+                      onClick={() => void upvote(answer.id)}
+                      aria-pressed={liked}
+                      aria-label="Upvote answer"
+                    >
+                      <span aria-hidden="true">▲</span>
+                      <span className="num">{answer.upvotes ?? 0}</span>
+                    </button>
+                    <div className="answer-body">
+                      <p>{answer.body}</p>
+                      <p className="meta">
+                        {answer.authorName} · {relativeDay(answer.createdAt)}
+                      </p>
+                    </div>
+                  </article>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+      <section className="reply-panel">
+        <h2>Your answer</h2>
+        {canReply ? (
+          <form className="reply-composer" onSubmit={sendReply}>
+            <label className="admin-field">
+              <span className="meta">Write a reply</span>
+              <textarea
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                rows={6}
+                required
+                minLength={10}
+                placeholder="Share a clear, useful answer…"
+              />
+            </label>
+            {error ? <p className="app-error">{error}</p> : null}
+            <div className="reply-composer-actions">
+              <button type="submit" className="btn btn-primary" disabled={submitting || reply.trim().length < 10}>
+                {submitting ? "Posting…" : "Post answer"}
               </button>
-              <div>
-                <p>{answer.body}</p>
-                <p className="meta">
-                  {answer.authorName} · {relativeDay(answer.createdAt)}
-                </p>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      <form className="ask-form" onSubmit={sendReply}>
-        <label className="admin-field">
-          <span className="meta">Your answer</span>
-          <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={6} required minLength={10} />
-        </label>
-        {error ? <p className="app-error">{error}</p> : null}
-        <button type="submit" className="btn btn-primary" disabled={submitting || reply.trim().length < 10}>
-          {submitting ? "Posting…" : "Post answer"}
-        </button>
-      </form>
+            </div>
+          </form>
+        ) : (
+          <p className="reply-locked">
+            {role === "student"
+              ? "Only verified specialists and admins can answer. Students can ask questions and upvote — not post replies, even on their own thread."
+              : "Sign in with a specialist or admin role to post answers."}
+          </p>
+        )}
+      </section>
     </article>
   );
 }

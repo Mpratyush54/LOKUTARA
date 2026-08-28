@@ -3,6 +3,8 @@ export type ProductModule = (typeof PRODUCT_MODULES)[number];
 
 export type Plan = "none" | "trial" | "paid";
 
+export type CommunityRole = "student" | "specialist" | "admin";
+
 export type ModuleFlags = Record<ProductModule, boolean>;
 
 export type BillingSettings = {
@@ -21,6 +23,7 @@ export type AccountRecord = {
   modules: ModuleFlags;
   seats: number;
   createdAt: Date;
+  communityRole?: CommunityRole;
 };
 
 export type AccessStatus = "none" | "trial" | "paid" | "expired";
@@ -96,8 +99,19 @@ export function canUseModule(access: AccessSnapshot, module: ProductModule): boo
   return access.canEnterApp && access.modules[module];
 }
 
+export function communityRoleOf(account: Pick<AccountRecord, "communityRole"> | null | undefined): CommunityRole {
+  const role = account?.communityRole;
+  if (role === "specialist" || role === "admin") return role;
+  return "student";
+}
+
+export function canPostCommunityAnswer(role: CommunityRole): boolean {
+  return role === "specialist" || role === "admin";
+}
+
 export function presentAccount(account: AccountRecord, now = new Date()) {
   const access = resolveAccess(account, now);
+  const communityRole = communityRoleOf(account);
   return {
     id: account.id,
     email: account.email,
@@ -105,5 +119,6 @@ export function presentAccount(account: AccountRecord, now = new Date()) {
     seats: account.seats,
     createdAt: account.createdAt.toISOString(),
     access,
+    communityRole,
   };
 }

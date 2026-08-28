@@ -12,6 +12,7 @@ export type AppAccount = {
   seats: number;
   createdAt: string;
   access: AccessSnapshot;
+  communityRole?: "student" | "specialist" | "admin";
 };
 
 const NAV = [

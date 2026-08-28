@@ -212,4 +212,20 @@ describe("admin product snapshot", () => {
       .send({ action: "revoke" });
     expect(revoked.body.account.access.canEnterApp).toBe(false);
   });
+
+  it("lets the founder set a community reply role", async () => {
+    const { server } = app();
+    const signup = await request(server).post("/api/auth/signup").send({
+      name: "Pilot",
+      email: "role@lokutara.test",
+      password: "pass-word",
+    });
+    const id = signup.body.account.id as string;
+    const granted = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "role", communityRole: "specialist" });
+    expect(granted.status).toBe(200);
+    expect(granted.body.account.communityRole).toBe("specialist");
+  });
 });

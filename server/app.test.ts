@@ -215,4 +215,51 @@ describe("API", () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("not_found");
   });
+
+  it("lets students ask but only specialists post answers, and returns reply rules", async () => {
+    const { server, stores } = app();
+    const signup = await request(server).post("/api/auth/signup").send({
+      name: "Asha Rao",
+      email: "asha-forum@lokutara.test",
+      password: "pass-word",
+    });
+    const cookie = signup.headers["set-cookie"];
+    expect(signup.body.account.communityRole).toBe("student");
+
+    const asked = await request(server)
+      .post("/api/workspace/community")
+      .set("Cookie", cookie)
+      .send({
+        title: "How do we brief managers after a workshop?",
+        body: "We need a short ritual that does not dump a psychometric report on them.",
+        tags: ["leadership"],
+      });
+    expect(asked.status).toBe(201);
+    const threadId = asked.body.thread.id as string;
+
+    const explore = await request(server).get("/api/workspace/community").set("Cookie", cookie);
+    expect(explore.status).toBe(200);
+    expect(explore.body.replyPolicy.canReply).toBe(false);
+    expect(explore.body.replyPolicy.rules.map((row: { who: string }) => row.who)).toEqual([
+      "Students",
+      "Specialists",
+      "Admins",
+    ]);
+
+    const blocked = await request(server)
+      .post(`/api/workspace/community/${threadId}/answers`)
+      .set("Cookie", cookie)
+      .send({ body: "Here is a specialist-grade answer that students must not post." });
+    expect(blocked.status).toBe(403);
+
+    const account = await stores.accountStore.getById(signup.body.account.id);
+    await stores.accountStore.update({ ...account!, communityRole: "specialist" });
+
+    const allowed = await request(server)
+      .post(`/api/workspace/community/${threadId}/answers`)
+      .set("Cookie", cookie)
+      .send({ body: "Here is a specialist-grade answer that students must not post." });
+    expect(allowed.status).toBe(201);
+    expect(allowed.body.thread.answers).toHaveLength(1);
+  });
 });

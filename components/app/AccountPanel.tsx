@@ -53,6 +53,10 @@ export function AccountPanel() {
           <dt>Community</dt>
           <dd>{account.access.modules.community ? "Included" : "Locked"}</dd>
         </div>
+        <div>
+          <dt>Community role</dt>
+          <dd>{account.communityRole ?? "student"}</dd>
+        </div>
       </dl>
       <p className="meta">
         Billing is managed by the founder in the admin console. There is no separate Forum or Competency checkout.

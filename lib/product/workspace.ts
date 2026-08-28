@@ -185,3 +185,22 @@ export function relativeDay(iso: string, now = new Date()): string {
   if (diff < 7) return `${diff} days ago`;
   return date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
+
+/** Forum production reply policy — shown in the community UI, not only in routes. */
+export const COMMUNITY_REPLY_RULES = [
+  {
+    who: "Students",
+    canReply: false,
+    detail: "Ask questions, browse, and upvote. Cannot post answers — including on their own unanswered thread.",
+  },
+  {
+    who: "Specialists",
+    canReply: true,
+    detail: "Post answers on unanswered (Pending) and already-answered threads.",
+  },
+  {
+    who: "Admins",
+    canReply: true,
+    detail: "Post answers and moderate. Same reply permission as specialists.",
+  },
+] as const;

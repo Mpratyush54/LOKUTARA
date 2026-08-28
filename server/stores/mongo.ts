@@ -119,6 +119,7 @@ const AccountSchema = new mongoose.Schema(
       community: { type: Boolean, default: false },
     },
     seats: { type: Number, default: 1 },
+    communityRole: { type: String, enum: ["student", "specialist", "admin"], default: "student" },
     createdAt: { type: Date, default: Date.now, index: true },
   },
   { collection: "app_accounts" },
@@ -389,6 +390,8 @@ function mapAccount(row: Record<string, unknown>): AccountRecord {
       community: Boolean(modules.community),
     },
     seats: Number(row.seats || 1),
+    communityRole:
+      row.communityRole === "specialist" || row.communityRole === "admin" ? row.communityRole : "student",
     createdAt: new Date((row.createdAt as Date) || Date.now()),
   };
 }

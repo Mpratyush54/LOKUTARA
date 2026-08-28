@@ -457,8 +457,19 @@ export function createAdminRouter(deps: {
         account.plan = "none";
         account.trialEndsAt = new Date();
         account.modules = { ...ALL_MODULES_OFF };
+      } else if (action === "role") {
+        /* community role only */
       } else {
-        throw new HttpError(400, "invalid", "action must be trial, paid, or revoke");
+        throw new HttpError(400, "invalid", "action must be trial, paid, revoke, or role");
+      }
+      if (body.communityRole !== undefined) {
+        const role = body.communityRole;
+        if (role !== "student" && role !== "specialist" && role !== "admin") {
+          throw new HttpError(400, "invalid", "communityRole must be student, specialist, or admin");
+        }
+        account.communityRole = role;
+      } else if (action === "role") {
+        throw new HttpError(400, "invalid", "communityRole is required");
       }
       if (body.seats !== undefined) {
         const seats = Number(body.seats);

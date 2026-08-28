@@ -1,10 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
-import { LOCAL_ASSESSMENTS, scoreAssessment, type StoredAnswer } from "../../lib/product/workspace";
+import { canPostCommunityAnswer, communityRoleOf } from "../../lib/access/billing";
+import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, scoreAssessment, type StoredAnswer } from "../../lib/product/workspace";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { requireAppAccess, requireModule, type AppRequest } from "../middleware/appAuth";
 import type { AccountStore, AppSessionStore, AssessmentRunStore, ThreadStore } from "../stores/memory";
 import type { LocalThread } from "../../lib/product/workspace";
+
+function replyPolicyFor(req: AppRequest) {
+  const role = communityRoleOf(req.account);
+  return {
+    role,
+    canReply: canPostCommunityAnswer(role),
+    rules: COMMUNITY_REPLY_RULES,
+  };
+}
 
 function presentThread(thread: LocalThread) {
   return {
@@ -86,7 +96,7 @@ export function createWorkspaceRouter(deps: {
   router.get(
     "/assessments/:id",
     requireModule("assessments"),
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (req: AppRequest, res) => {
       const assessment = LOCAL_ASSESSMENTS.find((item) => item.id === req.params.id);
       if (!assessment) throw new HttpError(404, "not_found", "Unknown assessment");
       res.json({ assessment });
@@ -150,7 +160,7 @@ export function createWorkspaceRouter(deps: {
   router.get(
     "/community",
     requireModule("community"),
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (req: AppRequest, res) => {
       const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
       const tag = typeof req.query.tag === "string" ? req.query.tag.trim().toLowerCase() : "";
       const sort = typeof req.query.sort === "string" ? req.query.sort : "latest";
@@ -163,7 +173,7 @@ export function createWorkspaceRouter(deps: {
       }
       if (tag) threads = threads.filter((thread) => thread.tags.some((item) => item.toLowerCase() === tag));
       if (sort === "unanswered") threads = threads.filter((thread) => thread.answers.length === 0);
-      res.json({ threads: threads.map(presentThread) });
+      res.json({ threads: threads.map(presentThread), replyPolicy: replyPolicyFor(req) });
     }),
   );
 
@@ -198,10 +208,10 @@ export function createWorkspaceRouter(deps: {
   router.get(
     "/community/:id",
     requireModule("community"),
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (req: AppRequest, res) => {
       const viewed = await deps.threads.incrementViews(req.params.id);
       if (!viewed) throw new HttpError(404, "not_found", "Thread not found");
-      res.json({ thread: presentThread(viewed) });
+      res.json({ thread: presentThread(viewed), replyPolicy: replyPolicyFor(req) });
     }),
   );
 
@@ -209,6 +219,14 @@ export function createWorkspaceRouter(deps: {
     "/community/:id/answers",
     requireModule("community"),
     asyncHandler(async (req: AppRequest, res) => {
+      const role = communityRoleOf(req.account);
+      if (!canPostCommunityAnswer(role)) {
+        throw new HttpError(
+          403,
+          "forbidden",
+          "Only specialists and admins can post answers. Students can ask questions and upvote.",
+        );
+      }
       const text = typeof req.body?.body === "string" ? req.body.body.trim() : "";
       if (text.length < 10) throw new HttpError(400, "invalid", "Write a reply of at least 10 characters");
       const thread = await deps.threads.addAnswer(req.params.id, {

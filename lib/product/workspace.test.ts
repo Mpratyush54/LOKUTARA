@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL_ASSESSMENTS, relativeDay, scoreAssessment } from "./workspace";
+import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, relativeDay, scoreAssessment } from "./workspace";
 
 describe("workspace assessments", () => {
   it("includes psychology, ocean, kolb ranking, and placement in one catalog", () => {
@@ -23,5 +23,12 @@ describe("workspace assessments", () => {
     const now = new Date("2026-08-28T12:00:00.000Z");
     expect(relativeDay("2026-08-28T08:00:00.000Z", now)).toBe("Today");
     expect(relativeDay("2026-08-27T08:00:00.000Z", now)).toBe("Yesterday");
+  });
+
+  it("publishes Forum reply rules for students, specialists, and admins", () => {
+    expect(COMMUNITY_REPLY_RULES.map((row) => row.who)).toEqual(["Students", "Specialists", "Admins"]);
+    expect(COMMUNITY_REPLY_RULES.find((row) => row.who === "Students")?.canReply).toBe(false);
+    expect(COMMUNITY_REPLY_RULES.find((row) => row.who === "Specialists")?.canReply).toBe(true);
+    expect(COMMUNITY_REPLY_RULES.find((row) => row.who === "Admins")?.canReply).toBe(true);
   });
 });

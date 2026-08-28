@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDays, canUseModule, resolveAccess, type AccountRecord } from "./billing";
+import { addDays, canPostCommunityAnswer, canUseModule, communityRoleOf, presentAccount, resolveAccess, type AccountRecord } from "./billing";
 
 function account(overrides: Partial<AccountRecord> = {}): AccountRecord {
   return {
@@ -54,5 +54,16 @@ describe("resolveAccess", () => {
     expect(access.status).toBe("paid");
     expect(canUseModule(access, "assessments")).toBe(true);
     expect(canUseModule(access, "community")).toBe(false);
+  });
+});
+
+describe("community roles", () => {
+  it("defaults missing roles to student and only lets specialists and admins answer", () => {
+    expect(communityRoleOf(account())).toBe("student");
+    expect(canPostCommunityAnswer("student")).toBe(false);
+    expect(canPostCommunityAnswer("specialist")).toBe(true);
+    expect(canPostCommunityAnswer("admin")).toBe(true);
+    expect(presentAccount(account()).communityRole).toBe("student");
+    expect(presentAccount(account({ communityRole: "specialist" })).communityRole).toBe("specialist");
   });
 });

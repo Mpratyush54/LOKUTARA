@@ -63,7 +63,8 @@ export function AssessmentsCatalog() {
     return (
       <div className="module-stack" aria-busy="true">
         <div className="app-skeleton app-skeleton-hero" />
-        <div className="module-grid">
+        <div className="assessment-grid">
+          <div className="app-skeleton app-skeleton-card" />
           <div className="app-skeleton app-skeleton-card" />
           <div className="app-skeleton app-skeleton-card" />
         </div>
@@ -102,15 +103,15 @@ export function AssessmentsCatalog() {
           Recommended
         </button>
       </div>
-      <div className="module-grid">
+      <div className="assessment-grid">
         {filtered.map((item) => (
           <article key={item.id} className="module-card test-card">
-            <div className="row-between">
+            <div className="test-card-top">
               <p className="meta">{item.level}</p>
               {item.recommended ? <span className="app-plan-pill">Recommended</span> : null}
             </div>
             <h2>{item.title}</h2>
-            <p>{item.copy}</p>
+            <p className="test-card-copy">{item.copy}</p>
             <p className="meta">
               {item.duration} · {item.itemCount} items · {item.kind === "rank" ? "Kolb ranking" : "MCQ"}
             </p>
@@ -279,8 +280,20 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
     setScore(body.run.score);
   }
 
-  if (error && !assessment) return <p className="app-error">{error}</p>;
-  if (!assessment) return <div className="app-skeleton app-skeleton-hero" aria-busy="true" />;
+  if (error && !assessment) {
+    return (
+      <div className="runner-stage">
+        <p className="app-error">{error}</p>
+      </div>
+    );
+  }
+  if (!assessment) {
+    return (
+      <div className="runner-stage" aria-busy="true">
+        <div className="app-skeleton app-skeleton-hero" />
+      </div>
+    );
+  }
 
   const item: AssessmentItem | undefined = assessment.items[index];
   const progress = Math.round(((index + 1) / assessment.items.length) * 100);
@@ -288,128 +301,138 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
 
   if (score !== null) {
     return (
-      <section className="module-stack">
-        <p className="eyebrow">Result</p>
-        <h1>Assessment complete</h1>
-        <p className="result-score num">{score}</p>
-        <p className="lead">
-          {assessment.title} · {answered} of {assessment.items.length} answered. A conversation sketch, not a diagnostic.
-        </p>
-        <div className="paywall-actions">
-          <Link className="btn btn-primary" href="/app/assessments">
-            Back to assessments
-          </Link>
-          <button type="button" className="btn btn-secondary" onClick={() => { setScore(null); setComplete(false); }}>
-            Review answers
-          </button>
-        </div>
-      </section>
+      <div className="runner-stage">
+        <section className="runner runner-result">
+          <p className="eyebrow">Result</p>
+          <h1>Assessment complete</h1>
+          <p className="result-score num">{score}</p>
+          <p className="lead">
+            {assessment.title} · {answered} of {assessment.items.length} answered. A conversation sketch, not a diagnostic.
+          </p>
+          <div className="runner-nav">
+            <Link className="btn btn-primary" href="/app/assessments">
+              Back to assessments
+            </Link>
+            <button type="button" className="btn btn-secondary" onClick={() => { setScore(null); setComplete(false); }}>
+              Review answers
+            </button>
+          </div>
+        </section>
+      </div>
     );
   }
 
   if (complete) {
     return (
-      <section className="runner-complete">
-        <h1>Ready to submit?</h1>
-        <p className="lead">
-          {assessment.title}. You have answered {answered} of {assessment.items.length}.
-        </p>
-        {error ? <p className="app-error">{error}</p> : null}
-        <div className="paywall-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => setComplete(false)}>
-            Review
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={saving || answered < assessment.items.length}
-            onClick={() => void submit()}
-          >
-            {saving ? "Saving…" : "Submit test"}
-          </button>
-        </div>
-      </section>
+      <div className="runner-stage">
+        <section className="runner runner-complete">
+          <h1>Ready to submit?</h1>
+          <p className="lead">
+            {assessment.title}. You have answered {answered} of {assessment.items.length}.
+          </p>
+          {error ? <p className="app-error">{error}</p> : null}
+          {answered < assessment.items.length ? (
+            <p className="meta">Answer every item before submitting.</p>
+          ) : null}
+          <div className="runner-nav">
+            <button type="button" className="btn btn-secondary" onClick={() => setComplete(false)}>
+              Review
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={saving || answered < assessment.items.length}
+              onClick={() => void submit()}
+            >
+              {saving ? "Saving…" : "Submit test"}
+            </button>
+          </div>
+        </section>
+      </div>
     );
   }
 
   const isRank = item?.kind === "rank";
 
+  function goNext() {
+    if (index < assessment.items.length - 1) setIndex((n) => n + 1);
+    else setComplete(true);
+  }
+
+  function selectMcq(itemId: string, value: number) {
+    setAnswers((prev) => ({ ...prev, [itemId]: { kind: "mcq", value } }));
+    const reduceMotion =
+      typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.setTimeout(goNext, reduceMotion ? 0 : 180);
+  }
+
   return (
-    <section className={`runner${isRank ? " is-kolb" : ""}`}>
-      <button type="button" className="btn btn-ghost" onClick={() => router.push("/app/assessments")}>
-        All assessments
-      </button>
-      <header className="runner-hero">
-        <div>
-          <p className="eyebrow">{assessment.title}</p>
-          <p className="meta">
-            Question {index + 1} of {assessment.items.length}
-          </p>
+    <div className="runner-stage">
+      <section className={`runner${isRank ? " is-kolb" : ""}`}>
+        <button type="button" className="btn btn-ghost runner-exit" onClick={() => router.push("/app/assessments")}>
+          All assessments
+        </button>
+        <header className="runner-hero">
+          <div>
+            <p className="eyebrow">{assessment.title}</p>
+            <p className="meta">
+              Question {index + 1} of {assessment.items.length}
+            </p>
+          </div>
+          <span className="runner-pct num">{progress}%</span>
+        </header>
+        <div className="runner-progress" aria-hidden="true">
+          <span style={{ width: `${progress}%` }} />
         </div>
-        <span className="num">{progress}%</span>
-      </header>
-      <div className="runner-progress" aria-hidden="true">
-        <span style={{ width: `${progress}%` }} />
-      </div>
-      {item?.kind === "mcq" ? (
-        <>
-          <div className="runner-prompt">
-            <h1>{item.prompt}</h1>
-          </div>
-          <div className="likert" role="radiogroup" aria-label={item.prompt}>
-            {item.options.map((option) => {
-              const selected = answers[item.id]?.kind === "mcq" && answers[item.id].value === option.value;
-              return (
-                <label key={option.value} className={selected ? "is-on" : undefined}>
-                  <input
-                    type="radio"
-                    name={item.id}
-                    value={option.value}
-                    checked={selected}
-                    onChange={() => {
-                      setAnswers((prev) => ({ ...prev, [item.id]: { kind: "mcq", value: option.value } }));
-                      window.setTimeout(() => {
-                        if (index < assessment.items.length - 1) setIndex((n) => n + 1);
-                        else setComplete(true);
-                      }, 180);
-                    }}
-                  />
-                  {option.label}
-                </label>
-              );
-            })}
-          </div>
-        </>
-      ) : null}
-      {item?.kind === "rank" ? (
-        <>
-          <div className="runner-prompt">
-            <h1>{item.prompt}</h1>
-            <p className="meta">Rank these statements from most like you (1) to least like you (4).</p>
-          </div>
-          <KolbRanker
-            item={item}
-            value={answers[item.id]?.kind === "rank" ? answers[item.id] : undefined}
-            onChange={(next) => setAnswers((prev) => ({ ...prev, [item.id]: next }))}
-          />
-        </>
-      ) : null}
-      {error ? <p className="app-error">{error}</p> : null}
-      <div className="runner-nav">
-        <button type="button" className="btn btn-secondary" disabled={index === 0} onClick={() => setIndex((n) => n - 1)}>
-          Previous
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => {
-            if (index < assessment.items.length - 1) setIndex((n) => n + 1);
-            else setComplete(true);
-          }}
-        >
-          {index === assessment.items.length - 1 ? "Finish" : "Next"}
-        </button>
-      </div>
-    </section>
+        <div className="runner-body">
+          {item?.kind === "mcq" ? (
+            <>
+              <div className="runner-prompt">
+                <h1 className="runner-q">{item.prompt}</h1>
+              </div>
+              <div className="likert" role="radiogroup" aria-label={item.prompt}>
+                {item.options.map((option) => {
+                  const selected = answers[item.id]?.kind === "mcq" && answers[item.id].value === option.value;
+                  return (
+                    <label key={option.value} className={selected ? "is-on" : undefined}>
+                      <input
+                        type="radio"
+                        name={item.id}
+                        value={option.value}
+                        checked={selected}
+                        onChange={() => selectMcq(item.id, option.value)}
+                      />
+                      {option.label}
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
+          {item?.kind === "rank" ? (
+            <>
+              <div className="runner-prompt">
+                <h1 className="runner-q">{item.prompt}</h1>
+                <p className="meta">Rank these statements from most like you (1) to least like you (4).</p>
+              </div>
+              <KolbRanker
+                item={item}
+                value={answers[item.id]?.kind === "rank" ? answers[item.id] : undefined}
+                onChange={(next) => setAnswers((prev) => ({ ...prev, [item.id]: next }))}
+              />
+            </>
+          ) : null}
+        </div>
+        {error ? <p className="app-error">{error}</p> : null}
+        <div className="runner-nav">
+          <button type="button" className="btn btn-secondary" disabled={index === 0} onClick={() => setIndex((n) => n - 1)}>
+            Previous
+          </button>
+          <button type="button" className="btn btn-primary" onClick={goNext}>
+            {index === assessment.items.length - 1 ? "Finish" : "Next"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }

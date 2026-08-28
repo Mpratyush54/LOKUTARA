@@ -38,6 +38,7 @@ type AccountRow = {
   seats: number;
   createdAt: string;
   access: AccessSnapshot;
+  communityRole?: "student" | "specialist" | "admin";
 };
 
 type OverviewPayload = {
@@ -237,6 +238,18 @@ export function AdminDashboard() {
     }
     setAccounts((prev) => (prev || []).map((row) => (row.id === id ? body.account : row)));
     setOverview(null);
+  }
+
+  async function setCommunityRole(id: string, communityRole: "student" | "specialist" | "admin") {
+    const { res, body } = await adminFetch(`/api/admin/accounts/${id}/access`, {
+      method: "POST",
+      body: JSON.stringify({ action: "role", communityRole }),
+    });
+    if (!res.ok) {
+      setError(body.message || "Could not update community role");
+      return;
+    }
+    setAccounts((prev) => (prev || []).map((row) => (row.id === id ? body.account : row)));
   }
 
   if (authed === null) {
@@ -564,6 +577,7 @@ export function AdminDashboard() {
                       <th>Person</th>
                       <th>Status</th>
                       <th>Modules</th>
+                      <th>Reply role</th>
                       <th>Ends</th>
                       <th>Actions</th>
                     </tr>
@@ -583,6 +597,22 @@ export function AdminDashboard() {
                           {row.access.modules.assessments ? "assessments " : ""}
                           {row.access.modules.community ? "community" : ""}
                           {!row.access.modules.assessments && !row.access.modules.community ? "—" : ""}
+                        </td>
+                        <td>
+                          <select
+                            aria-label={`Community role for ${row.name}`}
+                            value={row.communityRole ?? "student"}
+                            onChange={(e) =>
+                              void setCommunityRole(
+                                row.id,
+                                e.target.value as "student" | "specialist" | "admin",
+                              )
+                            }
+                          >
+                            <option value="student">Student</option>
+                            <option value="specialist">Specialist</option>
+                            <option value="admin">Admin</option>
+                          </select>
                         </td>
                         <td className="meta">{row.access.trialEndsAt ? when(row.access.trialEndsAt) : "—"}</td>
                         <td className="admin-row-actions">
