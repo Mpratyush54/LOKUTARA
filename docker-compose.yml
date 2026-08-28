@@ -10,5 +10,21 @@ services:
     ports:
       - "6379:6379"
 
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - lokutara_mongo:/data/db
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+# One Mongo, three databases: lokutara, competency, forum.
+# The site UI is only the root Next app. APIs run as
+# `npm run dev:tests-api` and `npm run dev:forum-api`.
+
 volumes:
   lokutara_mongo:

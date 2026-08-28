@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  app:
+    image: ${DOCKER_IMAGE_NAME:-yourusername/forum-backend:latest}
+    container_name: forum-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - forum-net
+
+  mongo:
+    image: mongo:6
+    container_name: forum-mongo
+    restart: always
+    ports:
+      - "27017:27017" # Consider removing port exposure in production for security!
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - forum-net
+
+  redis:
+    image: redis:alpine
+    container_name: forum-redis
+    restart: always
+    volumes:
+      - redis-data:/data
+    networks:
+      - forum-net
+
+networks:
+  forum-net:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  redis-data:

@@ -3,6 +3,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { MetricsWindow } from "@/lib/tracking/metrics";
 import type { ExperimentKey, ExperimentVariant } from "@/lib/tracking/experiment";
+import type { AccessSnapshot, BillingSettings } from "@/lib/access/billing";
+import type { DayPoint } from "@/lib/charts/series";
+import { FunnelBars, TrendChart } from "@/components/charts/TrendChart";
 
 type AdminLead = {
   id: string;
@@ -10,25 +13,9 @@ type AdminLead = {
   name: string;
   email: string;
   phone: string;
-  role: string | null;
   organisation: string | null;
-  sizeBand: string | null;
-  preferredTime: string | null;
-  visitorId: string | null;
   createdAt: string;
   redacted: boolean;
-};
-
-type AdminEvent = {
-  name: string;
-  at: string;
-  path: string;
-  visitorId: string;
-  sessionId: string;
-  channel: string | null;
-  experiment: string | null;
-  variant: ExperimentVariant | null;
-  props: Record<string, unknown>;
 };
 
 type ExperimentRow = {
@@ -40,17 +27,27 @@ type ExperimentRow = {
   forcedVariant: ExperimentVariant | null;
   updatedAt: string | null;
   stats: {
-    key: ExperimentKey;
-    variants: Array<{
-      variant: ExperimentVariant;
-      assignments: number;
-      ctaClicks: number;
-      ctr: number;
-    }>;
+    variants: Array<{ variant: ExperimentVariant; assignments: number; ctaClicks: number; ctr: number }>;
   };
 };
 
-type Tab = "overview" | "leads" | "events" | "experiments";
+type AccountRow = {
+  id: string;
+  email: string;
+  name: string;
+  seats: number;
+  createdAt: string;
+  access: AccessSnapshot;
+};
+
+type OverviewPayload = {
+  metrics: MetricsWindow;
+  series: DayPoint[];
+  accounts: { none: number; trial: number; paid: number; expired: number; total: number };
+  workspace: { runs: number; threads: number; replies: number };
+};
+
+type Tab = "overview" | "leads" | "assessments" | "community" | "trials" | "experiments";
 
 function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
@@ -91,13 +88,19 @@ export function AdminDashboard() {
   const [emailRequired, setEmailRequired] = useState(true);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<MetricsWindow | null>(null);
-  const [leads, setLeads] = useState<AdminLead[]>([]);
-  const [events, setEvents] = useState<AdminEvent[]>([]);
-  const [experiments, setExperiments] = useState<ExperimentRow[]>([]);
+  const [overview, setOverview] = useState<OverviewPayload | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [leads, setLeads] = useState<AdminLead[] | null>(null);
+  const [workspace, setWorkspace] = useState<{
+    runs: Array<{ id: string; accountName: string; assessmentId: string; score: number; createdAt: string }>;
+    threads: Array<{ id: string; title: string; authorName: string; tags: string[]; views: number; answerCount: number }>;
+  } | null>(null);
+  const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [billing, setBilling] = useState<BillingSettings | null>(null);
+  const [experiments, setExperiments] = useState<ExperimentRow[] | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [trialDays, setTrialDays] = useState(14);
 
   const checkSession = useCallback(async () => {
     const { res, body } = await adminFetch("/api/admin/session");
@@ -111,30 +114,20 @@ export function AdminDashboard() {
     setAuthed(Boolean(body.authenticated));
   }, []);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true);
     setError(null);
-    try {
-      const [m, l, e, x] = await Promise.all([
-        adminFetch("/api/admin/metrics"),
-        adminFetch("/api/admin/leads?limit=50"),
-        adminFetch("/api/admin/events?limit=100"),
-        adminFetch("/api/admin/experiments"),
-      ]);
-      if ([m, l, e, x].some((r) => r.res.status === 401)) {
-        setAuthed(false);
-        return;
-      }
-      if (!m.res.ok) throw new Error(m.body.message || "Could not load metrics");
-      setMetrics(m.body as MetricsWindow);
-      setLeads((l.body.leads as AdminLead[]) || []);
-      setEvents((e.body.events as AdminEvent[]) || []);
-      setExperiments((x.body.experiments as ExperimentRow[]) || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load dashboard");
-    } finally {
-      setLoading(false);
+    const { res, body } = await adminFetch("/api/admin/overview");
+    setOverviewLoading(false);
+    if (res.status === 401) {
+      setAuthed(false);
+      return;
     }
+    if (!res.ok) {
+      setError(body.message || "Could not load overview");
+      return;
+    }
+    setOverview(body as OverviewPayload);
   }, []);
 
   useEffect(() => {
@@ -142,8 +135,40 @@ export function AdminDashboard() {
   }, [checkSession]);
 
   useEffect(() => {
-    if (authed) void loadData();
-  }, [authed, loadData]);
+    if (authed && tab === "overview") void loadOverview();
+  }, [authed, tab, loadOverview]);
+
+  useEffect(() => {
+    if (!authed) return;
+    if (tab === "leads" && leads === null) {
+      void (async () => {
+        const { res, body } = await adminFetch("/api/admin/leads?limit=50");
+        if (res.ok) setLeads(body.leads || []);
+      })();
+    }
+    if ((tab === "assessments" || tab === "community") && workspace === null) {
+      void (async () => {
+        const { res, body } = await adminFetch("/api/admin/workspace");
+        if (res.ok) setWorkspace(body);
+      })();
+    }
+    if (tab === "trials" && (accounts === null || billing === null)) {
+      void (async () => {
+        const [a, b] = await Promise.all([adminFetch("/api/admin/accounts"), adminFetch("/api/admin/billing")]);
+        if (a.res.ok) setAccounts(a.body.accounts || []);
+        if (b.res.ok) {
+          setBilling(b.body.settings);
+          setTrialDays(b.body.settings?.defaultTrialDays ?? 14);
+        }
+      })();
+    }
+    if (tab === "experiments" && experiments === null) {
+      void (async () => {
+        const { res, body } = await adminFetch("/api/admin/experiments");
+        if (res.ok) setExperiments(body.experiments || []);
+      })();
+    }
+  }, [authed, tab, leads, workspace, accounts, billing, experiments]);
 
   async function onLogin(ev: FormEvent) {
     ev.preventDefault();
@@ -163,10 +188,12 @@ export function AdminDashboard() {
   async function onLogout() {
     await adminFetch("/api/admin/logout", { method: "POST" });
     setAuthed(false);
-    setMetrics(null);
-    setLeads([]);
-    setEvents([]);
-    setExperiments([]);
+    setOverview(null);
+    setLeads(null);
+    setWorkspace(null);
+    setAccounts(null);
+    setBilling(null);
+    setExperiments(null);
   }
 
   async function saveExperiment(row: ExperimentRow, patch: Partial<ExperimentRow>) {
@@ -182,12 +209,34 @@ export function AdminDashboard() {
         }),
       });
       if (!res.ok) throw new Error(body.message || "Could not save experiment");
-      setExperiments((prev) => prev.map((item) => (item.key === row.key ? { ...item, ...body.experiment } : item)));
+      setExperiments((prev) => (prev || []).map((item) => (item.key === row.key ? { ...item, ...body.experiment } : item)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSavingKey(null);
     }
+  }
+
+  async function saveBilling(next: Partial<BillingSettings>) {
+    if (!billing) return;
+    const { res, body } = await adminFetch("/api/admin/billing", {
+      method: "PUT",
+      body: JSON.stringify({ ...billing, ...next }),
+    });
+    if (res.ok) setBilling(body.settings);
+  }
+
+  async function setAccess(id: string, action: "trial" | "paid" | "revoke") {
+    const { res, body } = await adminFetch(`/api/admin/accounts/${id}/access`, {
+      method: "POST",
+      body: JSON.stringify({ action, days: trialDays }),
+    });
+    if (!res.ok) {
+      setError(body.message || "Could not update access");
+      return;
+    }
+    setAccounts((prev) => (prev || []).map((row) => (row.id === id ? body.account : row)));
+    setOverview(null);
   }
 
   if (authed === null) {
@@ -205,8 +254,7 @@ export function AdminDashboard() {
           <p className="eyebrow">Lokutara admin</p>
           <h1>Dashboard locked</h1>
           <p className="lead">
-            Set <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> in{" "}
-            <code>.env.local</code> (or legacy <code>ADMIN_DASHBOARD_SECRET</code>), restart{" "}
+            Set <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> in <code>.env.local</code>, restart{" "}
             <code>npm run dev</code>, then return here.
           </p>
         </div>
@@ -218,53 +266,54 @@ export function AdminDashboard() {
     return (
       <main className="admin-shell">
         <form className="admin-gate" onSubmit={onLogin}>
-          <p className="eyebrow">Lokutara admin</p>
-          <h1>Founder dashboard</h1>
-          <p className="lead">
-            Sign in with your admin email and password to view tracking and control experiments.
-          </p>
+          <p className="eyebrow">Founder ops</p>
+          <h1>Lokutara console</h1>
+          <p className="lead">One admin for the funnel, trials, assessments, and community — not three products.</p>
           {emailRequired ? (
             <label className="admin-field">
               <span className="meta">Email</span>
-              <input
-                type="email"
-                autoComplete="username"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+              <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
             </label>
           ) : null}
           <label className="admin-field">
             <span className="meta">Password</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
+            <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </label>
           {loginError ? <p className="admin-error">{loginError}</p> : null}
           <button type="submit" className="btn btn-primary admin-gate-submit">
-            Open dashboard
+            Open console
           </button>
         </form>
       </main>
     );
   }
 
+  const metrics = overview?.metrics;
+
   return (
-    <main className="admin-shell">
+    <main className="admin-shell admin-ops">
       <header className="admin-top">
         <div>
-          <p className="eyebrow">Internal</p>
-          <h1>Lokutara control</h1>
-          <p className="lead">Launch metrics from first-party events — workshops and counselling only.</p>
+          <p className="eyebrow">Founder</p>
+          <h1>Ops console</h1>
+          <p className="lead">Live funnel, product usage, and trial controls in one place.</p>
         </div>
         <div className="admin-top-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => void loadData()} disabled={loading}>
-            {loading ? "Refreshing…" : "Refresh"}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              if (tab === "overview") void loadOverview();
+              if (tab === "leads") setLeads(null);
+              if (tab === "assessments" || tab === "community") setWorkspace(null);
+              if (tab === "trials") {
+                setAccounts(null);
+                setBilling(null);
+              }
+              if (tab === "experiments") setExperiments(null);
+            }}
+          >
+            Refresh tab
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => void onLogout()}>
             Sign out
@@ -272,21 +321,18 @@ export function AdminDashboard() {
         </div>
       </header>
 
-      <nav className="admin-tabs" aria-label="Dashboard sections">
+      <nav className="admin-tabs" aria-label="Ops sections">
         {(
           [
             ["overview", "Overview"],
             ["leads", "Leads"],
-            ["events", "Events"],
+            ["assessments", "Assessments"],
+            ["community", "Community"],
+            ["trials", "Trials"],
             ["experiments", "Experiments"],
           ] as const
         ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={tab === id ? "is-active" : undefined}
-            onClick={() => setTab(id)}
-          >
+          <button key={id} type="button" className={tab === id ? "is-active" : undefined} onClick={() => setTab(id)}>
             {label}
           </button>
         ))}
@@ -296,50 +342,42 @@ export function AdminDashboard() {
 
       {tab === "overview" ? (
         <section className="admin-panel">
-          {!metrics || (metrics.pageViews === 0 && metrics.uniqueVisitors === 0) ? (
-            <p className="admin-empty">No events in the last 30 days yet. Browse the site with analytics consent to seed data.</p>
-          ) : (
+          {overviewLoading && !overview ? <div className="admin-skeleton" /> : null}
+          {overview && metrics ? (
             <>
               <div className="admin-stat-grid">
                 <Stat label="Page views" value={fmt(metrics.pageViews)} hint="30 days" />
-                <Stat label="Unique visitors" value={fmt(metrics.uniqueVisitors)} hint="approx · 30d" />
-                <Stat label="Sessions" value={fmt(metrics.sessions)} hint="30 days" />
-                <Stat label="DAU" value={fmt(metrics.dau)} hint="24 hours" />
-                <Stat label="WAU" value={fmt(metrics.wau)} hint="7 days" />
-                <Stat label="MAU" value={fmt(metrics.mau)} hint="30 days" />
-                <Stat label="Bounce rate" value={pct(metrics.bounceRate)} hint="single page sessions" />
+                <Stat label="Visitors" value={fmt(metrics.uniqueVisitors)} hint="30 days" />
                 <Stat label="Conversion" value={pct(metrics.funnel.conversionRate)} hint="leads / visitors" />
+                <Stat label="Trials" value={fmt(overview.accounts.trial)} hint={`${overview.accounts.paid} paid`} />
+                <Stat label="Runs" value={fmt(overview.workspace.runs)} hint="assessments" />
+                <Stat label="Threads" value={fmt(overview.workspace.threads)} hint={`${overview.workspace.replies} replies`} />
               </div>
-
+              <div className="chart-grid">
+                <TrendChart points={overview.series} valueKey="views" label="Pageviews · 14d" />
+                <TrendChart points={overview.series} valueKey="leads" label="Leads · 14d" />
+              </div>
               <h2 className="admin-h2">Funnel</h2>
-              <div className="admin-funnel">
-                <FunnelStep label="Page views" value={metrics.funnel.pageViews} />
-                <FunnelStep label="CTA clicks" value={metrics.funnel.ctaClicks} />
-                <FunnelStep label="Form starts" value={metrics.funnel.formStarts} />
-                <FunnelStep label="Leads" value={metrics.funnel.leadsSubmitted} />
-              </div>
-
-              {metrics.sources.length ? (
-                <>
-                  <h2 className="admin-h2">Sources</h2>
-                  <ul className="admin-source-list">
-                    {metrics.sources.map((source) => (
-                      <li key={source.channel}>
-                        <span>{source.channel}</span>
-                        <span className="num">{fmt(source.visitors)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : null}
+              <FunnelBars
+                steps={[
+                  { label: "Page views", value: metrics.funnel.pageViews },
+                  { label: "CTA clicks", value: metrics.funnel.ctaClicks },
+                  { label: "Form starts", value: metrics.funnel.formStarts },
+                  { label: "Leads", value: metrics.funnel.leadsSubmitted },
+                ]}
+              />
             </>
-          )}
+          ) : !overviewLoading ? (
+            <p className="admin-empty">No overview yet. Browse the public site with analytics on to seed charts.</p>
+          ) : null}
         </section>
       ) : null}
 
       {tab === "leads" ? (
         <section className="admin-panel">
-          {!leads.length ? (
+          {!leads ? (
+            <div className="admin-skeleton" />
+          ) : !leads.length ? (
             <p className="admin-empty">No leads stored yet.</p>
           ) : (
             <div className="admin-table-wrap">
@@ -375,34 +413,30 @@ export function AdminDashboard() {
         </section>
       ) : null}
 
-      {tab === "events" ? (
+      {tab === "assessments" ? (
         <section className="admin-panel">
-          {!events.length ? (
-            <p className="admin-empty">No events stored yet.</p>
+          {!workspace ? (
+            <div className="admin-skeleton" />
+          ) : !workspace.runs.length ? (
+            <p className="admin-empty">No assessment completions yet. Completions from the customer dashboard land here.</p>
           ) : (
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
                   <tr>
                     <th>When</th>
-                    <th>Type</th>
-                    <th>Path</th>
-                    <th>Experiment</th>
-                    <th>Channel</th>
+                    <th>Person</th>
+                    <th>Assessment</th>
+                    <th>Score</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {events.map((event, idx) => (
-                    <tr key={`${event.at}-${event.name}-${idx}`}>
-                      <td className="meta">{when(event.at)}</td>
-                      <td>
-                        <code>{event.name}</code>
-                      </td>
-                      <td>{event.path}</td>
-                      <td className="meta">
-                        {event.experiment ? `${event.experiment} · ${event.variant || "?"}` : "—"}
-                      </td>
-                      <td className="meta">{event.channel || "—"}</td>
+                  {workspace.runs.map((run) => (
+                    <tr key={run.id}>
+                      <td className="meta">{when(run.createdAt)}</td>
+                      <td>{run.accountName}</td>
+                      <td>{run.assessmentId}</td>
+                      <td className="num">{run.score}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -412,9 +446,145 @@ export function AdminDashboard() {
         </section>
       ) : null}
 
+      {tab === "community" ? (
+        <section className="admin-panel">
+          {!workspace ? (
+            <div className="admin-skeleton" />
+          ) : !workspace.threads.length ? (
+            <p className="admin-empty">No community threads yet. This is the same product — there is no second forum admin.</p>
+          ) : (
+            <div className="admin-table-wrap">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Thread</th>
+                    <th>Author</th>
+                    <th>Replies</th>
+                    <th>Views</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workspace.threads.map((thread) => (
+                    <tr key={thread.id}>
+                      <td>{thread.title}</td>
+                      <td>{thread.authorName}</td>
+                      <td className="num">{thread.answerCount}</td>
+                      <td className="num">{thread.views}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {tab === "trials" ? (
+        <section className="admin-panel">
+          {!billing || !accounts ? (
+            <div className="admin-skeleton" />
+          ) : (
+            <>
+              <div className="trial-controls">
+                <label className="admin-toggle">
+                  <input
+                    type="checkbox"
+                    checked={billing.autoTrialOnSignup}
+                    onChange={(e) => void saveBilling({ autoTrialOnSignup: e.target.checked })}
+                  />
+                  <span>Auto-start trial on signup</span>
+                </label>
+                <label className="admin-field">
+                  <span className="meta">Default trial days</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={trialDays}
+                    onChange={(e) => setTrialDays(Number(e.target.value))}
+                    onBlur={() => void saveBilling({ defaultTrialDays: trialDays })}
+                  />
+                </label>
+                <label className="admin-toggle">
+                  <input
+                    type="checkbox"
+                    checked={billing.trialModules.assessments}
+                    onChange={(e) =>
+                      void saveBilling({
+                        trialModules: { ...billing.trialModules, assessments: e.target.checked },
+                      })
+                    }
+                  />
+                  <span>Assessments on trial</span>
+                </label>
+                <label className="admin-toggle">
+                  <input
+                    type="checkbox"
+                    checked={billing.trialModules.community}
+                    onChange={(e) =>
+                      void saveBilling({
+                        trialModules: { ...billing.trialModules, community: e.target.checked },
+                      })
+                    }
+                  />
+                  <span>Community on trial</span>
+                </label>
+              </div>
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Person</th>
+                      <th>Status</th>
+                      <th>Modules</th>
+                      <th>Ends</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accounts.map((row) => (
+                      <tr key={row.id}>
+                        <td>
+                          {row.name}
+                          <br />
+                          <span className="meta">{row.email}</span>
+                        </td>
+                        <td>
+                          <span className="admin-pill">{row.access.status}</span>
+                        </td>
+                        <td className="meta">
+                          {row.access.modules.assessments ? "assessments " : ""}
+                          {row.access.modules.community ? "community" : ""}
+                          {!row.access.modules.assessments && !row.access.modules.community ? "—" : ""}
+                        </td>
+                        <td className="meta">{row.access.trialEndsAt ? when(row.access.trialEndsAt) : "—"}</td>
+                        <td className="admin-row-actions">
+                          <button type="button" className="btn btn-secondary" onClick={() => void setAccess(row.id, "trial")}>
+                            Trial
+                          </button>
+                          <button type="button" className="btn btn-secondary" onClick={() => void setAccess(row.id, "paid")}>
+                            Paid
+                          </button>
+                          <button type="button" className="btn btn-ghost" onClick={() => void setAccess(row.id, "revoke")}>
+                            Revoke
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {!accounts.length ? <p className="admin-empty">No customer accounts yet. Signups from /signup appear here.</p> : null}
+            </>
+          )}
+        </section>
+      ) : null}
+
       {tab === "experiments" ? (
         <section className="admin-panel admin-experiments">
-          {!experiments.length ? (
+          {!experiments ? (
+            <div className="admin-skeleton" />
+          ) : !experiments.length ? (
             <p className="admin-empty">No known experiments.</p>
           ) : (
             experiments.map((row) => (
@@ -423,10 +593,6 @@ export function AdminDashboard() {
                   <div>
                     <h2 className="admin-h2">{row.label}</h2>
                     <p className="meta">{row.description}</p>
-                    <p className="meta">
-                      key <code>{row.key}</code>
-                      {row.updatedAt ? ` · updated ${when(row.updatedAt)}` : " · defaults"}
-                    </p>
                   </div>
                   <label className="admin-toggle">
                     <input
@@ -438,7 +604,6 @@ export function AdminDashboard() {
                     <span>{row.enabled ? "Enabled" : "Disabled → control"}</span>
                   </label>
                 </header>
-
                 <div className="admin-experiment-grid">
                   <label className="admin-field">
                     <span className="meta">Control weight</span>
@@ -475,8 +640,7 @@ export function AdminDashboard() {
                       disabled={savingKey === row.key}
                       onChange={(e) => {
                         const value = e.target.value;
-                        const forcedVariant =
-                          value === "control" || value === "variant" ? value : null;
+                        const forcedVariant = value === "control" || value === "variant" ? value : null;
                         void saveExperiment(row, { forcedVariant });
                       }}
                     >
@@ -486,13 +650,11 @@ export function AdminDashboard() {
                     </select>
                   </label>
                 </div>
-
                 <div className="admin-variant-stats">
                   {row.stats.variants.map((stat) => (
                     <div key={stat.variant} className="admin-variant-card">
                       <p className="eyebrow">{stat.variant}</p>
                       <p className="num admin-big">{fmt(stat.assignments)}</p>
-                      <p className="meta">assignments</p>
                       <p className="meta">
                         {fmt(stat.ctaClicks)} CTA · CTR {pct(stat.ctr)}
                       </p>
@@ -514,15 +676,6 @@ function Stat({ label, value, hint }: { label: string; value: string; hint: stri
       <p className="meta">{label}</p>
       <p className="num admin-big">{value}</p>
       <p className="meta">{hint}</p>
-    </div>
-  );
-}
-
-function FunnelStep({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="admin-funnel-step">
-      <p className="num admin-big">{fmt(value)}</p>
-      <p className="meta">{label}</p>
     </div>
   );
 }

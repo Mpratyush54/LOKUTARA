@@ -13,6 +13,10 @@ export type AppEnv = {
   adminDashboardSecret: string | null;
   /** Soft warnings for operators; never secrets. */
   warnings: string[];
+  /** Competency-mapping API (same product, separate process). */
+  testsApiUrl: string | null;
+  /** Forum API (same product, separate process). */
+  forumApiUrl: string | null;
 };
 
 function nonempty(value: string | undefined): string | null {
@@ -45,6 +49,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
   const adminEmail = nonempty(source.ADMIN_EMAIL);
   const adminDashboardSecret =
     nonempty(source.ADMIN_PASSWORD) || nonempty(source.ADMIN_DASHBOARD_SECRET);
+  const testsApiUrl = nonempty(source.TESTS_API_URL);
+  const forumApiUrl = nonempty(source.FORUM_API_URL);
   const warnings: string[] = [];
 
   if (nodeEnv === "production" && !mongodbUri) {
@@ -71,6 +77,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     trustProxy: parseBool(source.TRUST_PROXY, nodeEnv === "production"),
     adminEmail,
     adminDashboardSecret,
+    testsApiUrl,
+    forumApiUrl,
     warnings,
   };
 }

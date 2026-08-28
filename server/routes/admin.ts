@@ -19,12 +19,28 @@ import {
   secretsEqual,
 } from "../middleware/adminAuth";
 import type {
+  AccountStore,
+  AssessmentRunStore,
+  BillingSettingsStore,
   EventStore,
   ExperimentConfigStore,
   LeadStore,
   StoredExperimentConfig,
   StoredLead,
+  ThreadStore,
 } from "../stores/memory";
+import { loadProductSnapshot } from "../../lib/product/snapshot";
+import { createProductUpstream, type ProductUpstream } from "../../lib/product/upstream";
+import { dailySeries } from "../../lib/charts/series";
+import {
+  ALL_MODULES_OFF,
+  DEFAULT_BILLING_SETTINGS,
+  addDays,
+  presentAccount,
+  resolveAccess,
+  type BillingSettings,
+  type ModuleFlags,
+} from "../../lib/access/billing";
 
 function maskEmail(email: string): string {
   const [local, domain] = email.split("@");
@@ -100,6 +116,11 @@ export function createAdminRouter(deps: {
   adminSecret?: string | null;
   /** Email override for tests (ADMIN_EMAIL). */
   adminEmail?: string | null;
+  product?: ProductUpstream;
+  accounts?: AccountStore;
+  billing?: BillingSettingsStore;
+  threads?: ThreadStore;
+  assessmentRuns?: AssessmentRunStore;
 }): Router {
   const router = Router();
   const envCreds = readAdminCredentials();
@@ -279,6 +300,175 @@ export function createAdminRouter(deps: {
           stats: computeExperimentStats(events, key),
         },
       });
+    }),
+  );
+
+  router.get(
+    "/product",
+    gate,
+    asyncHandler(async (_req, res) => {
+      const snapshot = await loadProductSnapshot(deps.product ?? createProductUpstream({}));
+      res.json(snapshot);
+    }),
+  );
+
+  router.get(
+    "/overview",
+    gate,
+    asyncHandler(async (_req, res) => {
+      const events = await deps.events.list();
+      const accounts = deps.accounts ? await deps.accounts.list() : [];
+      const runs = deps.assessmentRuns ? await deps.assessmentRuns.list() : [];
+      const threads = deps.threads ? await deps.threads.list() : [];
+      const counts = { none: 0, trial: 0, paid: 0, expired: 0 };
+      for (const account of accounts) {
+        counts[resolveAccess(account).status] += 1;
+      }
+      res.json({
+        metrics: computeMetrics(events),
+        series: dailySeries(events, 14),
+        accounts: { ...counts, total: accounts.length },
+        workspace: {
+          runs: runs.length,
+          threads: threads.length,
+          replies: threads.reduce((sum, thread) => sum + thread.answers.length, 0),
+        },
+      });
+    }),
+  );
+
+  router.get(
+    "/workspace",
+    gate,
+    asyncHandler(async (_req, res) => {
+      const runs = deps.assessmentRuns ? await deps.assessmentRuns.list() : [];
+      const threads = deps.threads ? await deps.threads.list() : [];
+      const accounts = deps.accounts ? await deps.accounts.list() : [];
+      const names = new Map(accounts.map((account) => [account.id, account.name || account.email]));
+      res.json({
+        runs: runs
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .slice(0, 50)
+          .map((run) => ({
+            id: run.id,
+            accountId: run.accountId,
+            accountName: names.get(run.accountId) || run.accountId,
+            assessmentId: run.assessmentId,
+            score: run.score,
+            createdAt: run.createdAt.toISOString(),
+          })),
+        threads: threads.slice(0, 50).map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          authorName: thread.authorName,
+          tags: thread.tags,
+          views: thread.views,
+          answerCount: thread.answers.length,
+          createdAt: thread.createdAt.toISOString(),
+        })),
+      });
+    }),
+  );
+
+  router.get(
+    "/billing",
+    gate,
+    asyncHandler(async (_req, res) => {
+      const settings = deps.billing ? await deps.billing.get() : DEFAULT_BILLING_SETTINGS;
+      res.json({ settings });
+    }),
+  );
+
+  router.put(
+    "/billing",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.billing) throw new HttpError(503, "unavailable", "Billing store is not configured");
+      const existing = await deps.billing.get();
+      const body = req.body || {};
+      const trialModules: ModuleFlags = {
+        assessments:
+          typeof body.trialModules?.assessments === "boolean"
+            ? body.trialModules.assessments
+            : existing.trialModules.assessments,
+        community:
+          typeof body.trialModules?.community === "boolean"
+            ? body.trialModules.community
+            : existing.trialModules.community,
+      };
+      const days = body.defaultTrialDays !== undefined ? Number(body.defaultTrialDays) : existing.defaultTrialDays;
+      if (!Number.isFinite(days) || days < 1 || days > 90) {
+        throw new HttpError(400, "invalid", "Trial length must be 1–90 days");
+      }
+      const settings: BillingSettings = {
+        autoTrialOnSignup:
+          typeof body.autoTrialOnSignup === "boolean" ? body.autoTrialOnSignup : existing.autoTrialOnSignup,
+        defaultTrialDays: days,
+        trialModules,
+      };
+      await deps.billing.save(settings);
+      res.json({ settings });
+    }),
+  );
+
+  router.get(
+    "/accounts",
+    gate,
+    asyncHandler(async (_req, res) => {
+      const accounts = deps.accounts ? await deps.accounts.list() : [];
+      res.json({
+        accounts: accounts.map((account) => presentAccount(account)),
+      });
+    }),
+  );
+
+  router.post(
+    "/accounts/:id/access",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.accounts) throw new HttpError(503, "unavailable", "Account store is not configured");
+      const account = await deps.accounts.getById(req.params.id);
+      if (!account) throw new HttpError(404, "not_found", "Account not found");
+      const body = req.body || {};
+      const action = typeof body.action === "string" ? body.action : "";
+      const settings = deps.billing ? await deps.billing.get() : DEFAULT_BILLING_SETTINGS;
+      if (action === "trial") {
+        const days = Number(body.days || settings.defaultTrialDays);
+        if (!Number.isFinite(days) || days < 1 || days > 90) {
+          throw new HttpError(400, "invalid", "Trial length must be 1–90 days");
+        }
+        account.plan = "trial";
+        account.trialEndsAt = addDays(new Date(), days);
+        account.modules = {
+          assessments:
+            typeof body.modules?.assessments === "boolean"
+              ? body.modules.assessments
+              : settings.trialModules.assessments,
+          community:
+            typeof body.modules?.community === "boolean" ? body.modules.community : settings.trialModules.community,
+        };
+      } else if (action === "paid") {
+        account.plan = "paid";
+        account.modules = {
+          assessments: typeof body.modules?.assessments === "boolean" ? body.modules.assessments : true,
+          community: typeof body.modules?.community === "boolean" ? body.modules.community : true,
+        };
+      } else if (action === "revoke") {
+        account.plan = "none";
+        account.trialEndsAt = new Date();
+        account.modules = { ...ALL_MODULES_OFF };
+      } else {
+        throw new HttpError(400, "invalid", "action must be trial, paid, or revoke");
+      }
+      if (body.seats !== undefined) {
+        const seats = Number(body.seats);
+        if (!Number.isFinite(seats) || seats < 1 || seats > 500) {
+          throw new HttpError(400, "invalid", "Seats must be 1–500");
+        }
+        account.seats = seats;
+      }
+      await deps.accounts.update(account);
+      res.json({ account: presentAccount(account) });
     }),
   );
 

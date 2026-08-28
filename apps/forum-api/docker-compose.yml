@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: forum-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongo:27017/forum
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=change_this_secret_in_production
+      # Add other vars from .env manually or use env_file
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - forum-net
+
+  mongo:
+    image: mongo:6
+    container_name: forum-mongo
+    restart: always
+    ports:
+      - "27017:27017" # Exposed for local debugging, consider removing in prod
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - forum-net
+
+  redis:
+    image: redis:alpine
+    container_name: forum-redis
+    restart: always
+    ports:
+      - "6379:6379" # Exposed for local debugging
+    volumes:
+      - redis-data:/data
+    networks:
+      - forum-net
+
+networks:
+  forum-net:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  redis-data:

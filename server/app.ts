@@ -4,16 +4,26 @@ import cors from "cors";
 import { createEventsRouter } from "./routes/events";
 import { createLeadsRouter } from "./routes/leads";
 import { createStubRouter } from "./routes/stubs";
+import { createProductRouter, createProductUpstream } from "./routes/product";
+import type { ProductUpstream } from "../lib/product/upstream";
 import { createAdminRouter } from "./routes/admin";
 import { createExperimentsRouter } from "./routes/experiments";
+import { createAuthRouter } from "./routes/auth";
+import { createWorkspaceRouter } from "./routes/workspace";
 import { apiNotFound, errorHandler } from "./middleware/errors";
+import { createMemoryStores } from "./stores/memory";
 import type {
+  AccountStore,
+  AppSessionStore,
+  AssessmentRunStore,
+  BillingSettingsStore,
   EventStore,
   ExperimentConfigStore,
   LeadStore,
   RateLimiter,
   SessionStore,
   StoreBackend,
+  ThreadStore,
   VisitorStore,
 } from "./stores/memory";
 import type { RedisStatus } from "./stores/redis";
@@ -38,12 +48,25 @@ export type ApiDeps = {
   trustProxy?: boolean;
   adminSecret?: string | null;
   adminEmail?: string | null;
+  product?: ProductUpstream;
+  accounts?: AccountStore;
+  appSessions?: AppSessionStore;
+  billing?: BillingSettingsStore;
+  threads?: ThreadStore;
+  assessmentRuns?: AssessmentRunStore;
 };
 
 export function createApiApp(deps: ApiDeps): Express {
   const app = express();
   app.disable("x-powered-by");
   if (deps.trustProxy) app.set("trust proxy", 1);
+
+  const fallback = createMemoryStores();
+  const accounts = deps.accounts ?? fallback.accountStore;
+  const appSessions = deps.appSessions ?? fallback.appSessionStore;
+  const billing = deps.billing ?? fallback.billingSettingsStore;
+  const threads = deps.threads ?? fallback.threadStore;
+  const assessmentRuns = deps.assessmentRuns ?? fallback.assessmentRunStore;
 
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: "32kb" }));
@@ -59,8 +82,14 @@ export function createApiApp(deps: ApiDeps): Express {
         ok: true,
         service: "lokutara",
         launch: {
-          now: ["workshops", "counselling", "discovery_leads", "first_party_analytics"],
-          later: ["connect", "measure", "app", "chat_product", "tests_product"],
+          now: [
+            "workshops",
+            "counselling",
+            "discovery_leads",
+            "first_party_analytics",
+            "app",
+          ],
+          later: ["chat_product"],
         },
         stores: {
           backend: health?.storeBackend ?? "memory",
@@ -76,7 +105,7 @@ export function createApiApp(deps: ApiDeps): Express {
         },
         mounts: {
           chat: "stub_501",
-          tests: "stub_501",
+          app: "paywalled",
           admin: deps.adminSecret ? "gated" : "disabled",
         },
       };
@@ -89,6 +118,11 @@ export function createApiApp(deps: ApiDeps): Express {
   app.use("/api/events", createEventsRouter(deps));
   app.use("/api/leads", createLeadsRouter(deps));
   app.use("/api/experiments", createExperimentsRouter({ experiments: deps.experiments }));
+  app.use("/api/auth", createAuthRouter({ accounts, sessions: appSessions, billing }));
+  app.use(
+    "/api/workspace",
+    createWorkspaceRouter({ accounts, sessions: appSessions, threads, assessmentRuns }),
+  );
   app.use(
     "/api/admin",
     createAdminRouter({
@@ -97,10 +131,15 @@ export function createApiApp(deps: ApiDeps): Express {
       experiments: deps.experiments,
       adminSecret: deps.adminSecret,
       adminEmail: deps.adminEmail,
+      product: deps.product,
+      accounts,
+      billing,
+      threads,
+      assessmentRuns,
     }),
   );
+  app.use("/api/product", createProductRouter(deps.product ?? createProductUpstream({})));
   app.use("/api/chat", createStubRouter("chat"));
-  app.use("/api/tests", createStubRouter("tests"));
   app.use("/api", apiNotFound);
   app.use(errorHandler);
 

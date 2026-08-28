@@ -1,6 +1,12 @@
 import type { StoredAnalyticsEvent } from "../../lib/tracking/events";
 import type { ValidLead } from "../../lib/leads/validate";
 import type { Attribution } from "../../lib/tracking/attribution";
+import {
+  DEFAULT_BILLING_SETTINGS,
+  type AccountRecord,
+  type BillingSettings,
+} from "../../lib/access/billing";
+import type { LocalAnswer, LocalThread } from "../../lib/product/workspace";
 
 export type StoredLead = ValidLead & {
   id: string;
@@ -65,6 +71,55 @@ export type RateLimiter = {
   allow(key: string, limit: number, windowMs: number): Promise<boolean>;
 };
 
+export type AppSession = {
+  token: string;
+  accountId: string;
+  createdAt: Date;
+};
+
+export type AssessmentRun = {
+  id: string;
+  accountId: string;
+  assessmentId: string;
+  answers: Record<string, unknown>;
+  score: number;
+  createdAt: Date;
+};
+
+export type AccountStore = {
+  create(account: AccountRecord): Promise<AccountRecord>;
+  getByEmail(email: string): Promise<AccountRecord | null>;
+  getById(id: string): Promise<AccountRecord | null>;
+  list(): Promise<AccountRecord[]>;
+  update(account: AccountRecord): Promise<AccountRecord>;
+};
+
+export type AppSessionStore = {
+  create(session: AppSession): Promise<void>;
+  get(token: string): Promise<AppSession | null>;
+  delete(token: string): Promise<void>;
+};
+
+export type BillingSettingsStore = {
+  get(): Promise<BillingSettings>;
+  save(settings: BillingSettings): Promise<BillingSettings>;
+};
+
+export type ThreadStore = {
+  list(): Promise<LocalThread[]>;
+  get(id: string): Promise<LocalThread | null>;
+  create(thread: LocalThread): Promise<LocalThread>;
+  addAnswer(id: string, answer: LocalAnswer): Promise<LocalThread | null>;
+  incrementViews(id: string): Promise<LocalThread | null>;
+  toggleUpvote(threadId: string, answerId: string, accountId: string): Promise<LocalThread | null>;
+};
+
+export type AssessmentRunStore = {
+  insert(run: AssessmentRun): Promise<AssessmentRun>;
+  listByAccount(accountId: string): Promise<AssessmentRun[]>;
+  list(): Promise<AssessmentRun[]>;
+};
+
 export type StoreBackend = "memory" | "mongo";
 
 export function createMemoryStores() {
@@ -74,6 +129,12 @@ export function createMemoryStores() {
   const sessions = new Map<string, StoredSession>();
   const experimentConfigs = new Map<string, StoredExperimentConfig>();
   const buckets = new Map<string, number[]>();
+  const accounts = new Map<string, AccountRecord>();
+  const accountsByEmail = new Map<string, string>();
+  const appSessions = new Map<string, AppSession>();
+  const threads: LocalThread[] = [];
+  const assessmentRuns: AssessmentRun[] = [];
+  let billingSettings: BillingSettings = { ...DEFAULT_BILLING_SETTINGS, trialModules: { ...DEFAULT_BILLING_SETTINGS.trialModules } };
 
   const eventStore: EventStore = {
     async insert(event) {
@@ -160,6 +221,101 @@ export function createMemoryStores() {
     },
   };
 
+  const accountStore: AccountStore = {
+    async create(account) {
+      accounts.set(account.id, account);
+      accountsByEmail.set(account.email.toLowerCase(), account.id);
+      return account;
+    },
+    async getByEmail(email) {
+      const id = accountsByEmail.get(email.trim().toLowerCase());
+      return id ? accounts.get(id) ?? null : null;
+    },
+    async getById(id) {
+      return accounts.get(id) ?? null;
+    },
+    async list() {
+      return [...accounts.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+    async update(account) {
+      accounts.set(account.id, account);
+      accountsByEmail.set(account.email.toLowerCase(), account.id);
+      return account;
+    },
+  };
+
+  const appSessionStore: AppSessionStore = {
+    async create(session) {
+      appSessions.set(session.token, session);
+    },
+    async get(token) {
+      return appSessions.get(token) ?? null;
+    },
+    async delete(token) {
+      appSessions.delete(token);
+    },
+  };
+
+  const billingSettingsStore: BillingSettingsStore = {
+    async get() {
+      return billingSettings;
+    },
+    async save(settings) {
+      billingSettings = settings;
+      return settings;
+    },
+  };
+
+  const threadStore: ThreadStore = {
+    async list() {
+      return [...threads].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+    async get(id) {
+      return threads.find((thread) => thread.id === id) ?? null;
+    },
+    async create(thread) {
+      threads.unshift(thread);
+      return thread;
+    },
+    async addAnswer(id, answer) {
+      const thread = threads.find((item) => item.id === id);
+      if (!thread) return null;
+      thread.answers.push(answer);
+      return thread;
+    },
+    async incrementViews(id) {
+      const thread = threads.find((item) => item.id === id);
+      if (!thread) return null;
+      thread.views += 1;
+      return thread;
+    },
+    async toggleUpvote(threadId, answerId, accountId) {
+      const thread = threads.find((item) => item.id === threadId);
+      if (!thread) return null;
+      const answer = thread.answers.find((item) => item.id === answerId);
+      if (!answer) return null;
+      const already = answer.upvotedBy.includes(accountId);
+      answer.upvotedBy = already
+        ? answer.upvotedBy.filter((id) => id !== accountId)
+        : [...answer.upvotedBy, accountId];
+      answer.upvotes = answer.upvotedBy.length;
+      return thread;
+    },
+  };
+
+  const assessmentRunStore: AssessmentRunStore = {
+    async insert(run) {
+      assessmentRuns.push(run);
+      return run;
+    },
+    async listByAccount(accountId) {
+      return assessmentRuns.filter((run) => run.accountId === accountId).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+    async list() {
+      return [...assessmentRuns];
+    },
+  };
+
   return {
     events,
     leads,
@@ -172,5 +328,10 @@ export function createMemoryStores() {
     sessionStore,
     experimentConfigStore,
     rateLimiter,
+    accountStore,
+    appSessionStore,
+    billingSettingsStore,
+    threadStore,
+    assessmentRunStore,
   };
 }

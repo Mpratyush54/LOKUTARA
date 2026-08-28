@@ -39,6 +39,67 @@ export function tierForHeadcount(headcount: number): (typeof SIZE_TIERS)[number]
   return SIZE_TIERS.find((tier) => headcount <= tier.max) ?? SIZE_TIERS[SIZE_TIERS.length - 1];
 }
 
+export const AUDIENCE = [
+  {
+    id: "hr",
+    title: "I’m an HR / People Leader",
+    copy: "Understand your people better through psychometric tools, identify competencies and development areas, and strengthen your organisation through people and leadership development.",
+    detail:
+      "You stay the buyer. Discovery comes first; psychometric work and leadership programmes are scoped after we understand the organisation.",
+    cta: "Book a discovery call",
+    form: "discovery" as const,
+  },
+  {
+    id: "startup-team",
+    title: "I’m a Startup Looking to Develop My Team",
+    copy: "Access practical training for your employees in workplace management, communication, collaboration, and professional effectiveness.",
+    detail:
+      "A founder or people lead books the same discovery call. Training is designed around the team you have now — not a fixed catalogue.",
+    cta: "Book a discovery call",
+    form: "discovery" as const,
+  },
+  {
+    id: "startup-mental-health",
+    title: "I’m a Startup Looking for Mental Health Support",
+    copy: "Outsource professional mental health services for your employees, including confidential one-to-one counselling with qualified mental health professionals.",
+    detail:
+      "You remain the buyer. Session topics are not reported back to the company. This is not an emergency service.",
+    cta: "Book a discovery call",
+    form: "discovery" as const,
+  },
+  {
+    id: "individual",
+    title: "I’m an Individual With a Question",
+    copy: "Have a question about mental health, relationships, work, or personal growth? Get thoughtful, psychology-informed answers from our panel of psychologists.",
+    detail: "Ask a psychologist. Crisis and emergency care are referred out — this site is not a hotline.",
+    cta: "Ask a psychologist",
+    form: "counselling" as const,
+  },
+] as const;
+
+export const PILOT_STEPS = [
+  {
+    id: "connect",
+    title: "Connect",
+    copy: "We begin with a complimentary 30–45 minute call to understand your context, goals, and what you want to achieve. No pressure. Just a conversation.",
+  },
+  {
+    id: "build",
+    title: "Build",
+    copy: "We design a workshop that fits your people and your goals. This could be a 2–3 hour session or a full-day experience—highly practical and interactive.",
+  },
+  {
+    id: "measure",
+    title: "Measure",
+    copy: "We gather participant feedback at the end of the session to understand what landed, what mattered, and what can be improved.",
+  },
+  {
+    id: "support",
+    title: "Support",
+    copy: "You receive an employer summary with key learnings and recommendations—without any counselling content or personal data.",
+  },
+] as const;
+
 export const OFFERINGS = [
   {
     id: "capacity",
@@ -90,15 +151,38 @@ export const OFFERINGS = [
   },
 ] as const;
 
+export const ABOUT_POINTS = [
+  {
+    id: "psychology-led",
+    title: "Psychology-led",
+    copy: "Our services are built and delivered by psychology professionals, not generic workplace-wellness content.",
+  },
+  {
+    id: "your-people",
+    title: "Built around your people",
+    copy: "We don’t believe every organisation needs the same intervention. We start by understanding your people, your context, and what you’re trying to change.",
+  },
+  {
+    id: "confidential",
+    title: "Confidential by design",
+    copy: "Individual psychological support stays confidential. Organisational conversations stay at a level that can be responsibly learned and improved — not by exposing individual employees.",
+  },
+  {
+    id: "trainers",
+    title: "Who your trainers are",
+    copy: "",
+  },
+] as const;
+
 export const PILLARS = [
   {
     id: "connect",
     label: "Connect",
-    status: "in design",
-    accent: "later",
-    detail: "Understand the firm’s experience and needs. A community / online forum is planned in the first six months — not live yet.",
-    action: "We start relationships with a discovery call today. The broader Connect layer ships later.",
-    related: ["Discovery"],
+    status: "in product",
+    accent: "now",
+    detail: "The workshop forum is a module inside the Lokutara dashboard after login — not a separate community product.",
+    action: "Discovery calls still start the relationship. The forum is the Connect layer inside Lokutara.",
+    related: ["Discovery", "Forum"],
   },
   {
     id: "build",
@@ -112,11 +196,11 @@ export const PILLARS = [
   {
     id: "measure",
     label: "Measure",
-    status: "in design",
-    accent: "later",
-    detail: "Pre/post effectiveness and a competency framework. Formal tools are not licensed yet. We will not call a self-built tool a validated psychometric.",
-    action: "Today we collect honest participant feedback. Validated psychometrics come after licensing.",
-    related: ["Assessment later", "Employer summary"],
+    status: "in product",
+    accent: "now",
+    detail: "Assessments live in the same dashboard as community. Formal tools are not licensed yet. We will not call a self-built tool a validated psychometric.",
+    action: "Participant feedback still ships with workshops. The test runner is the Measure layer inside Lokutara.",
+    related: ["Tests", "Employer summary"],
   },
   {
     id: "support",

@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  psych-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: psych-api
+    ports:
+      - "3010:3010"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    restart: always
+    volumes:
+      - .:/app
+      - pm2-logs:/root/.pm2/logs
+
+  psych-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: psych-worker
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    restart: always
+    volumes:
+      - .:/app
+      - pm2-logs:/root/.pm2/logs
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    restart: always
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    ports:
+      - "9080:9080"
+    volumes:
+      - pm2-logs:/var/log/pm2
+      - ./promtail.yaml:/etc/promtail/promtail.yaml
+    restart: always
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:10.3.0
+    ports:
+      - "3000:3000"
+    restart: always
+
+volumes:
+  pm2-logs:

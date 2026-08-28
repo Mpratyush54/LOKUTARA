@@ -1,0 +1,58 @@
+import { describe, expect, it } from "vitest";
+import { addDays, canUseModule, resolveAccess, type AccountRecord } from "./billing";
+
+function account(overrides: Partial<AccountRecord> = {}): AccountRecord {
+  return {
+    id: "acc_1",
+    email: "a@lokutara.test",
+    name: "Asha",
+    passwordHash: "x",
+    plan: "none",
+    trialEndsAt: null,
+    modules: { assessments: false, community: false },
+    seats: 1,
+    createdAt: new Date("2026-08-01T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+describe("resolveAccess", () => {
+  it("opens the app during an active trial", () => {
+    const now = new Date("2026-08-10T00:00:00.000Z");
+    const access = resolveAccess(
+      account({
+        plan: "trial",
+        trialEndsAt: addDays(now, 5),
+        modules: { assessments: true, community: true },
+      }),
+      now,
+    );
+    expect(access.status).toBe("trial");
+    expect(access.canEnterApp).toBe(true);
+    expect(canUseModule(access, "assessments")).toBe(true);
+  });
+
+  it("closes the paywall when a trial has ended", () => {
+    const now = new Date("2026-08-20T00:00:00.000Z");
+    const access = resolveAccess(
+      account({
+        plan: "trial",
+        trialEndsAt: new Date("2026-08-10T00:00:00.000Z"),
+        modules: { assessments: true, community: true },
+      }),
+      now,
+    );
+    expect(access.status).toBe("expired");
+    expect(access.canEnterApp).toBe(false);
+    expect(canUseModule(access, "community")).toBe(false);
+  });
+
+  it("keeps paid modules open without a trial clock", () => {
+    const access = resolveAccess(
+      account({ plan: "paid", modules: { assessments: true, community: false } }),
+    );
+    expect(access.status).toBe("paid");
+    expect(canUseModule(access, "assessments")).toBe(true);
+    expect(canUseModule(access, "community")).toBe(false);
+  });
+});

@@ -6,3 +6,8 @@ out
 coverage
 *.log
 .DS_Store
+apps/**/node_modules
+apps/**/.env
+apps/**/.env.local
+tmp-forum-web/
+tmp-tests-web/

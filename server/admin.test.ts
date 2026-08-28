@@ -20,6 +20,11 @@ function app(opts: { adminSecret?: string | null; adminEmail?: string | null } =
       sessions: stores.sessionStore,
       experiments: stores.experimentConfigStore,
       rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
       adminSecret,
       adminEmail,
       health: {
@@ -164,5 +169,47 @@ describe("presentLeadForAdmin", () => {
     });
     expect(presented.email).toBe("joel@lokutara.test");
     expect(presented.redacted).toBe(false);
+  });
+});
+
+describe("admin product snapshot", () => {
+  it("returns assessments and community inside the same admin API", async () => {
+    const { server } = app();
+    const res = await request(server)
+      .get("/api/admin/product")
+      .set("x-admin-secret", ADMIN_SECRET);
+    expect(res.status).toBe(200);
+    expect(res.body.assessments.items.length).toBeGreaterThan(0);
+    expect(res.body.community.threads).toEqual([]);
+    expect(res.body.assessments.status).toBe("unset");
+  });
+
+  it("lets the founder grant and revoke a trial", async () => {
+    const { server, stores } = app();
+    const signup = await request(server).post("/api/auth/signup").send({
+      name: "Pilot",
+      email: "pilot@lokutara.test",
+      password: "pass-word",
+    });
+    const id = signup.body.account.id as string;
+    await stores.accountStore.update({
+      ...(await stores.accountStore.getById(id))!,
+      plan: "none",
+      trialEndsAt: null,
+      modules: { assessments: false, community: false },
+    });
+
+    const granted = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "trial", days: 7 });
+    expect(granted.status).toBe(200);
+    expect(granted.body.account.access.status).toBe("trial");
+
+    const revoked = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "revoke" });
+    expect(revoked.body.account.access.canEnterApp).toBe(false);
   });
 });

@@ -7,12 +7,17 @@ import { createMemoryStores } from "./stores/memory";
 import {
   connectMongo,
   ensureMongoIndexes,
+  mongoAccountStore,
+  mongoAppSessionStore,
+  mongoAssessmentRunStore,
+  mongoBillingSettingsStore,
   mongoEventStore,
   mongoExperimentConfigStore,
   mongoLeadStore,
   mongoPing,
   mongoReady,
   mongoSessionStore,
+  mongoThreadStore,
   mongoVisitorStore,
 } from "./stores/mongo";
 import { createRedisBundle } from "./stores/redis";
@@ -50,10 +55,19 @@ async function main() {
     visitors: useMongo ? mongoVisitorStore : memory.visitorStore,
     sessions: useMongo ? mongoSessionStore : memory.sessionStore,
     experiments: useMongo ? mongoExperimentConfigStore : memory.experimentConfigStore,
+    accounts: useMongo ? mongoAccountStore : memory.accountStore,
+    appSessions: useMongo ? mongoAppSessionStore : memory.appSessionStore,
+    billing: useMongo ? mongoBillingSettingsStore : memory.billingSettingsStore,
+    threads: useMongo ? mongoThreadStore : memory.threadStore,
+    assessmentRuns: useMongo ? mongoAssessmentRunStore : memory.assessmentRunStore,
     rateLimiter: redis ? redis.rateLimiter : memory.rateLimiter,
     trustProxy: env.trustProxy,
     adminSecret: env.adminDashboardSecret,
     adminEmail: env.adminEmail,
+    product: {
+      testsApiUrl: env.testsApiUrl,
+      forumApiUrl: env.forumApiUrl,
+    },
     health: {
       storeBackend: useMongo ? ("mongo" as const) : ("memory" as const),
       mongoConfigured: Boolean(env.mongodbUri),

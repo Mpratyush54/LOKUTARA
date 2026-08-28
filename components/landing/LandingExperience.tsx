@@ -1,32 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { OFFERINGS, PILLARS, PRICING, BOOKING_STEPS, tierForHeadcount } from "@/lib/landing/content";
+import { ABOUT_POINTS, AUDIENCE, OFFERINGS, PILLARS, PRICING, BOOKING_STEPS, tierForHeadcount } from "@/lib/landing/content";
+import { NeedGuide } from "@/components/landing/NeedGuide";
+import { PilotSteps } from "@/components/landing/PilotSteps";
 import { experimentFor, loadExperimentConfigs, submitLead, track } from "@/lib/tracking/client";
-import { useCountUp, useReveal } from "@/hooks/useMotion";
-
-const AUDIENCE = [
-  {
-    id: "hr",
-    title: "HR & people leads",
-    copy: "A paid custom pilot: discovery, a workshop shaped to the team, participant feedback, and an employer summary.",
-    detail: "You stay the buyer. We do not ask employees to self-serve an EAP app at launch.",
-  },
-  {
-    id: "founders",
-    title: "Founders without HR",
-    copy: "The same discovery call. A narrower workshop if the company is still small.",
-    detail: "Useful when there is no dedicated people lead and the founder is the economic buyer.",
-  },
-  {
-    id: "employees",
-    title: "Individuals",
-    copy: "Confidential, non-emergency counselling. Crisis and emergency care are referred out.",
-    detail: "Session topics are not reported to your employer. This site is not an emergency line.",
-  },
-] as const;
-
-const RADIAL = ["Discovery", "Workshop", "Counselling", "Employer summary", "Community later", "Assessment later"];
+import { useReveal } from "@/hooks/useMotion";
 
 type FormType = "discovery" | "counselling" | "popup";
 
@@ -62,7 +41,6 @@ export function LandingExperience() {
     { from: "bot", text: "Hello. Are you looking for a company discovery call, or individual counselling?" },
   ]);
   const [chatInput, setChatInput] = useState("");
-  const [counted, setCounted] = useState(false);
   const [ctaLabel, setCtaLabel] = useState("Book a discovery call");
   const [navOpen, setNavOpen] = useState(false);
   const [navScrolled, setNavScrolled] = useState(false);
@@ -75,9 +53,6 @@ export function LandingExperience() {
     () => Array.from({ length: 24 }, (_, i) => ({ left: i * 4.2 + 1, height: 25 + ((i * 17) % 55), delay: (i % 7) * 0.2 })),
     [],
   );
-  const countDiscovery = useCountUp(45, counted);
-  const countPrice = useCountUp(1200, counted);
-  const countPros = useCountUp(4, counted);
 
   useEffect(() => {
     void (async () => {
@@ -99,10 +74,6 @@ export function LandingExperience() {
     const id = window.setInterval(() => setPhone((p) => (p + 1) % BOOKING_STEPS.length), 4500);
     return () => window.clearInterval(id);
   }, [phonePaused]);
-
-  useEffect(() => {
-    if (outcomesReveal.visible) setCounted(true);
-  }, [outcomesReveal.visible]);
 
   useEffect(() => {
     const reduce =
@@ -134,7 +105,6 @@ export function LandingExperience() {
 
   const activePillar = PILLARS[pillar];
   const wheelRotation = -(pillar * (360 / PILLARS.length));
-  const linkedRadial = new Set(activePillar.related);
   const activeBooking = BOOKING_STEPS[phone];
 
   function openForm(type: FormType) {
@@ -166,6 +136,7 @@ export function LandingExperience() {
           </a>
           <nav aria-label="Primary">
             <a href="#offerings" onClick={(e) => { e.preventDefault(); goTo("#offerings"); }}>Offerings</a>
+            <a href="/app">Product</a>
             <a href="#approach" onClick={(e) => { e.preventDefault(); goTo("#approach"); }}>Approach</a>
             <a href="#resources" onClick={(e) => { e.preventDefault(); goTo("#resources"); }}>Resources</a>
             <a href="#contact" onClick={(e) => { e.preventDefault(); goTo("#contact"); }}>Contact</a>
@@ -185,6 +156,7 @@ export function LandingExperience() {
         </div>
         <div className={`mobile-nav${navOpen ? " is-open" : ""}`}>
           <a href="#offerings" onClick={(e) => { e.preventDefault(); goTo("#offerings"); }}>Offerings</a>
+          <a href="/app">Product</a>
           <a href="#approach" onClick={(e) => { e.preventDefault(); goTo("#approach"); }}>Approach</a>
           <a href="#resources" onClick={(e) => { e.preventDefault(); goTo("#resources"); }}>Resources</a>
           <a href="#contact" onClick={(e) => { e.preventDefault(); goTo("#contact"); }}>Contact</a>
@@ -260,18 +232,19 @@ export function LandingExperience() {
 
         <RevealSection id="audience">
           <div className="container stack" style={{ gap: 40 }}>
-            <div style={{ maxWidth: "42ch" }}>
+            <div style={{ maxWidth: "28ch" }}>
               <p className="eyebrow" style={{ color: "var(--forest)" }}>
-                Built for the buyer in the room
+                Who we work with
               </p>
-              <h2>One process. Three ways in.</h2>
+              <h2>One team. Four ways we can help</h2>
             </div>
             <div className="audience-tabs">
               {AUDIENCE.map((tab, i) => (
                 <button
                   key={tab.id}
                   type="button"
-                  className={`audience-tab reveal-delay-${i + 1}${audience === i ? " active" : ""}`}
+                  className={`audience-tab reveal-delay-${(i % 4) + 1}${audience === i ? " active" : ""}`}
+                  aria-pressed={audience === i}
                   onMouseEnter={() => setAudience(i)}
                   onFocus={() => setAudience(i)}
                   onClick={() => setAudience(i)}
@@ -281,38 +254,31 @@ export function LandingExperience() {
                 </button>
               ))}
             </div>
-            <p className="meta audience-detail" key={audience}>
-              {AUDIENCE[audience].detail}
-            </p>
+            <div className="audience-detail" key={audience}>
+              <p className="meta">{AUDIENCE[audience].detail}</p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => openForm(AUDIENCE[audience].form)}
+              >
+                {AUDIENCE[audience].cta}
+              </button>
+            </div>
           </div>
         </RevealSection>
 
-        <RevealSection id="offerings">
-          <div className="container stack" style={{ gap: 40 }}>
-            <div>
+        <RevealSection id="guide">
+          <div className="container stack" style={{ gap: 32 }}>
+            <div style={{ maxWidth: "22ch" }}>
               <p className="eyebrow" style={{ color: "var(--forest)" }}>
-                Launch offer
+                If the four doors are not obvious
               </p>
-              <h2>What we sell now. Click for detail.</h2>
+              <h2>Not sure what you need? Let’s figure it out.</h2>
             </div>
-            <div className="service-grid">
-              {OFFERINGS.map((item, i) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`service-card reveal-delay-${(i % 4) + 1}`}
-                  onClick={() => {
-                    setOffering(item);
-                    track("offering_open", { id: item.id });
-                  }}
-                >
-                  <span className="svc-icon">●</span>
-                  <h3>{item.title}</h3>
-                  <p>{item.blurb}</p>
-                  <span className="svc-arrow">{item.tag} →</span>
-                </button>
-              ))}
-            </div>
+            <NeedGuide
+              onBookDiscovery={() => openForm("discovery")}
+              onAskPsychologist={() => openForm("counselling")}
+            />
           </div>
         </RevealSection>
 
@@ -359,59 +325,44 @@ export function LandingExperience() {
 
         <RevealSection className="guarantee-band" id="pilot">
           <div className="container guarantee-inner">
-            <div />
-            <div style={{ textAlign: "center" }}>
-              <p className="eyebrow">How a pilot works</p>
-              <div className="guarantee-num num">4 steps</div>
-            </div>
-            <div>
-              <h2 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(28px, 4vw, 40px)" }}>
-                Discovery, then a paid workshop, then feedback.
-              </h2>
-              <p className="lead" style={{ marginTop: 16 }}>
-                Complimentary 30–45 min call. Tailored 2–3 hour or full-day session. Participant feedback. Employer
-                summary — no counselling content in that report.
-              </p>
-            </div>
+            <PilotSteps />
           </div>
         </RevealSection>
 
         <section
           ref={outcomesReveal.ref}
           className={`section ${outcomesReveal.className}`}
-          id="outcomes"
+          id="about"
         >
           <div className="container">
-            <div className={`outcomes-stage stack${counted ? " is-live" : ""}`} style={{ gap: 48 }}>
+            <div className={`outcomes-stage stack${outcomesReveal.visible ? " is-live" : ""}`} style={{ gap: 48 }}>
               <div style={{ maxWidth: "44ch" }}>
-                <p className="eyebrow">What we can stand behind today</p>
-                <h2>Facts of the practice. Not borrowed EAP scores.</h2>
-                <p className="lead">Numbers below are the launch offer, not outcome claims from unpaid pilots.</p>
+                <p className="eyebrow">About the practice</p>
+                <h2>Who is behind the work, and how it stays responsible.</h2>
               </div>
-              <div className="grid-3">
-                <StatCard value={countDiscovery} unit="min" label="Maximum length of the complimentary discovery call." />
-                <StatCard value={countPrice} unit="₹" label="Individual counselling, 60 minutes." prefix />
-                <StatCard value={countPros} unit="" label="Psychology professionals available for direct counselling." />
-              </div>
-              <div className="donut-row-wow">
-                <Donut pct={counted ? 100 : 0} label="Build live" caption="Workshops and manager programmes" />
-                <Donut pct={counted ? 100 : 0} label="Support live" caption="Individual and group counselling" />
-                <Donut pct={counted ? 20 : 0} label="Connect & Measure" caption="In design over the next six months" />
-              </div>
+              <ol className="about-grid">
+                {ABOUT_POINTS.map((point, index) => (
+                  <li key={point.id} className="about-card">
+                    <p className="about-index num">{String(index + 1).padStart(2, "0")}</p>
+                    <h3>{point.title}</h3>
+                    {point.copy ? <p>{point.copy}</p> : <p className="about-pending">Copy coming next.</p>}
+                  </li>
+                ))}
+              </ol>
             </div>
           </div>
         </section>
 
         <RevealSection id="approach">
-          <div className="container grid-2" style={{ gap: 48, alignItems: "start" }}>
-            <div className="wheel-panel">
+          <div className="container approach-layout">
+            <div className="approach-copy">
               <div>
                 <p className="eyebrow" style={{ color: "var(--forest)" }}>
                   Four pillars + how we deliver
                 </p>
                 <h2>Click the wheel.</h2>
                 <p className="lead" style={{ margin: "16px 0 0" }}>
-                  Each node rotates into place and lights the parts of the process it owns. Launch vs later is labelled honestly.
+                  Each node rotates into place. Launch vs later is labelled honestly.
                 </p>
               </div>
               <div className="wheel-detail" key={activePillar.id}>
@@ -447,6 +398,8 @@ export function LandingExperience() {
                   )}
                 </div>
               </div>
+            </div>
+            <div className="approach-wheel">
               <div className="wheel-wrap" aria-label="Lokutara pillars">
                 <div className="wheel-orbit" aria-hidden="true" />
                 <div
@@ -458,7 +411,7 @@ export function LandingExperience() {
                 <div className="wheel-ring" style={{ transform: `rotate(${wheelRotation}deg)` }}>
                   {PILLARS.map((node, i) => {
                     const angle = (i / PILLARS.length) * Math.PI * 2 - Math.PI / 2;
-                    const r = 42; // % of wheel-wrap — positions use parent %, not node size
+                    const r = 42;
                     return (
                       <button
                         key={node.id}
@@ -481,52 +434,34 @@ export function LandingExperience() {
                 </div>
               </div>
             </div>
-            <div className="radial-panel">
-              <p className="pill">How support flows</p>
-              <h2 style={{ marginTop: 16 }}>From the first call through delivery.</h2>
-              <p className="lead" style={{ marginTop: 12 }}>
-                Linked steps light up when you pick a wheel node.
+          </div>
+        </RevealSection>
+
+        <RevealSection id="offerings">
+          <div className="container stack" style={{ gap: 40 }}>
+            <div>
+              <p className="eyebrow" style={{ color: "var(--forest)" }}>
+                Launch offer
               </p>
-              <div className="radial-wrap">
-                <svg className="radial-svg" viewBox="0 0 100 100" aria-hidden="true">
-                  {RADIAL.map((label, i) => {
-                    const angle = (i / RADIAL.length) * Math.PI * 2 - Math.PI / 2;
-                    const linked = linkedRadial.has(label);
-                    const x1 = 50 + Math.cos(angle) * 28;
-                    const y1 = 50 + Math.sin(angle) * 28;
-                    const x2 = 50 + Math.cos(angle) * 36;
-                    const y2 = 50 + Math.sin(angle) * 36;
-                    return (
-                      <line
-                        key={label}
-                        className={`radial-spoke-line${linked ? " is-linked" : ""}`}
-                        x1={x1}
-                        y1={y1}
-                        x2={x2}
-                        y2={y2}
-                      />
-                    );
-                  })}
-                </svg>
-                <div className="radial-core">Lokutara process</div>
-                {RADIAL.map((label, i) => {
-                  const angle = (i / RADIAL.length) * Math.PI * 2 - Math.PI / 2;
-                  const r = 40;
-                  const linked = linkedRadial.has(label);
-                  return (
-                    <div
-                      key={label}
-                      className={`radial-node${linked ? " is-linked" : ""}`}
-                      style={{
-                        left: `${50 + Math.cos(angle) * r}%`,
-                        top: `${50 + Math.sin(angle) * r}%`,
-                      }}
-                    >
-                      {label}
-                    </div>
-                  );
-                })}
-              </div>
+              <h2>What we sell now. Click for detail.</h2>
+            </div>
+            <div className="service-grid">
+              {OFFERINGS.map((item, i) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`service-card reveal-delay-${(i % 4) + 1}`}
+                  onClick={() => {
+                    setOffering(item);
+                    track("offering_open", { id: item.id });
+                  }}
+                >
+                  <span className="svc-icon">●</span>
+                  <h3>{item.title}</h3>
+                  <p>{item.blurb}</p>
+                  <span className="svc-arrow">{item.tag} →</span>
+                </button>
+              ))}
             </div>
           </div>
         </RevealSection>
@@ -615,7 +550,7 @@ export function LandingExperience() {
                 ["Note", "Manager effectiveness, without clinical jargon"],
                 ["Guide", "What a discovery call covers"],
                 ["Boundary", "Non-emergency counselling and referral"],
-                ["Roadmap", "Connect, Measure, and the app — later"],
+                ["Roadmap", "Chat and the mobile app — later"],
               ].map(([kind, title]) => (
                 <article key={title} className="resource-card">
                   <div className="resource-cover">{kind}</div>
@@ -771,37 +706,6 @@ export function LandingExperience() {
         </button>
       </div>
     </>
-  );
-}
-
-function StatCard({ value, unit, label, prefix }: { value: number; unit: string; label: string; prefix?: boolean }) {
-  return (
-    <div className="stat-card-wow">
-      <div className="stat-num num">
-        {prefix ? unit : null}
-        {value}
-        {!prefix && unit ? <span style={{ fontSize: "0.45em", marginLeft: 4 }}>{unit}</span> : null}
-      </div>
-      <p className="stat-label">{label}</p>
-    </div>
-  );
-}
-
-function Donut({ pct, label, caption }: { pct: number; label: string; caption: string }) {
-  const circ = 414.7;
-  const offset = circ - (circ * pct) / 100;
-  return (
-    <div className="donut-card">
-      <div className="donut-svg-wrap">
-        <svg className="donut" viewBox="0 0 160 160" aria-hidden="true">
-          <circle className="donut-bg" cx="80" cy="80" r="66" />
-          <circle className="donut-fill" cx="80" cy="80" r="66" strokeDasharray={circ} strokeDashoffset={offset} />
-        </svg>
-        <span className="donut-pct num">{pct}%</span>
-      </div>
-      <span className="donut-label">{label}</span>
-      <span className="donut-caption">{caption}</span>
-    </div>
   );
 }
 

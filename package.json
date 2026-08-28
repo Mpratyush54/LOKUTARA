@@ -2,8 +2,15 @@
   "name": "lokutara",
   "private": true,
   "version": "0.1.0",
+  "workspaces": [
+    "apps/competency-api",
+    "apps/forum-api"
+  ],
   "scripts": {
     "dev": "tsx watch server/index.ts",
+    "dev:web": "tsx watch server/index.ts",
+    "dev:tests-api": "npm run serve -w @lokutara/competency-api",
+    "dev:forum-api": "npm run dev -w @lokutara/forum-api",
     "build": "next build",
     "start": "cross-env NODE_ENV=production tsx server/index.ts",
     "test": "vitest run",
