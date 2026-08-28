@@ -1,3 +1,6 @@
+import type { GenderIdentity, IdentityProfile } from "./profile";
+import { EMPTY_IDENTITY, identityFrom } from "./profile";
+
 export const PRODUCT_MODULES = ["assessments", "community"] as const;
 export type ProductModule = (typeof PRODUCT_MODULES)[number];
 
@@ -24,7 +27,7 @@ export type AccountRecord = {
   seats: number;
   createdAt: Date;
   communityRole?: CommunityRole;
-};
+} & IdentityProfile;
 
 export type AccessStatus = "none" | "trial" | "paid" | "expired";
 
@@ -112,6 +115,7 @@ export function canPostCommunityAnswer(role: CommunityRole): boolean {
 export function presentAccount(account: AccountRecord, now = new Date()) {
   const access = resolveAccess(account, now);
   const communityRole = communityRoleOf(account);
+  const identity = identityFrom(account);
   return {
     id: account.id,
     email: account.email,
@@ -120,5 +124,28 @@ export function presentAccount(account: AccountRecord, now = new Date()) {
     createdAt: account.createdAt.toISOString(),
     access,
     communityRole,
+    phone: identity.phone,
+    gender: identity.gender,
+    age: identity.age,
+    city: identity.city,
   };
 }
+
+export function applyProfilePatch(
+  account: AccountRecord,
+  patch: Partial<Pick<AccountRecord, "name" | "email" | "phone" | "gender" | "age" | "city">>,
+): AccountRecord {
+  return {
+    ...account,
+    ...EMPTY_IDENTITY,
+    ...identityFrom(account),
+    ...(patch.name !== undefined ? { name: patch.name } : {}),
+    ...(patch.email !== undefined ? { email: patch.email } : {}),
+    ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
+    ...(patch.gender !== undefined ? { gender: patch.gender } : {}),
+    ...(patch.age !== undefined ? { age: patch.age } : {}),
+    ...(patch.city !== undefined ? { city: patch.city } : {}),
+  };
+}
+
+export type { GenderIdentity, IdentityProfile };

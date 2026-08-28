@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { canPostCommunityAnswer, communityRoleOf } from "../../lib/access/billing";
-import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, scoreAssessment, type StoredAnswer } from "../../lib/product/workspace";
+import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, interpretAssessment, type StoredAnswer, type TraitScore } from "../../lib/product/workspace";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { requireAppAccess, requireModule, type AppRequest } from "../middleware/appAuth";
 import type { AccountStore, AppSessionStore, AssessmentRunStore, ThreadStore } from "../stores/memory";
@@ -13,6 +13,38 @@ function replyPolicyFor(req: AppRequest) {
     role,
     canReply: canPostCommunityAnswer(role),
     rules: COMMUNITY_REPLY_RULES,
+  };
+}
+
+function presentRun(run: {
+  id: string;
+  assessmentId: string;
+  answers: Record<string, unknown>;
+  score: number;
+  traits?: TraitScore[];
+  createdAt: Date;
+}) {
+  const assessment = LOCAL_ASSESSMENTS.find((item) => item.id === run.assessmentId);
+  const interpreted = assessment
+    ? interpretAssessment(assessment, run.answers)
+    : {
+        score: run.score,
+        headline: "Saved as a conversation sketch.",
+        disclaimer:
+          "These scores are a conversation sketch from your self-report — not a licensed psychometric, clinical diagnosis, or hiring decision.",
+        traits: run.traits ?? [],
+      };
+  const traits = run.traits?.length ? run.traits : interpreted.traits;
+  return {
+    id: run.id,
+    assessmentId: run.assessmentId,
+    title: assessment?.title ?? run.assessmentId,
+    score: run.score,
+    headline: interpreted.headline,
+    disclaimer: interpreted.disclaimer,
+    traits,
+    createdAt: run.createdAt.toISOString(),
+    resultsPath: `/app/assessments/${run.assessmentId}/results?run=${run.id}`,
   };
 }
 
@@ -54,12 +86,7 @@ export function createWorkspaceRouter(deps: {
       const runs = await deps.assessmentRuns.listByAccount(req.accountId!);
       const threads = await deps.threads.list();
       res.json({
-        runs: runs.slice(0, 5).map((run) => ({
-          id: run.id,
-          assessmentId: run.assessmentId,
-          score: run.score,
-          createdAt: run.createdAt.toISOString(),
-        })),
+        runs: runs.slice(0, 5).map(presentRun),
         threadCount: threads.length,
         recentThreads: threads.slice(0, 4).map(presentThread),
       });
@@ -71,24 +98,28 @@ export function createWorkspaceRouter(deps: {
     requireModule("assessments"),
     asyncHandler(async (req: AppRequest, res) => {
       const runs = await deps.assessmentRuns.listByAccount(req.accountId!);
+      const latestByAssessment = new Map<string, (typeof runs)[number]>();
+      for (const run of runs) {
+        if (!latestByAssessment.has(run.assessmentId)) latestByAssessment.set(run.assessmentId, run);
+      }
       res.json({
-        assessments: LOCAL_ASSESSMENTS.map((item) => ({
-          id: item.id,
-          title: item.title,
-          duration: item.duration,
-          copy: item.copy,
-          itemCount: item.items.length,
-          level: item.level,
-          track: item.track,
-          recommended: item.recommended,
-          kind: item.items.some((row) => row.kind === "rank") ? "rank" : "mcq",
-        })),
-        runs: runs.map((run) => ({
-          id: run.id,
-          assessmentId: run.assessmentId,
-          score: run.score,
-          createdAt: run.createdAt.toISOString(),
-        })),
+        assessments: LOCAL_ASSESSMENTS.map((item) => {
+          const latest = latestByAssessment.get(item.id);
+          return {
+            id: item.id,
+            title: item.title,
+            duration: item.duration,
+            copy: item.copy,
+            itemCount: item.items.length,
+            level: item.level,
+            track: item.track,
+            recommended: item.recommended,
+            kind: item.items.some((row) => row.kind === "rank") ? "rank" : "mcq",
+            latestRunId: latest?.id ?? null,
+            latestScore: latest?.score ?? null,
+          };
+        }),
+        runs: runs.map(presentRun),
       });
     }),
   );
@@ -138,22 +169,56 @@ export function createWorkspaceRouter(deps: {
           parsed[item.id] = { kind: "rank", ranked };
         }
       }
+      const interpreted = interpretAssessment(assessment, parsed);
       const run = await deps.assessmentRuns.insert({
         id: `run_${randomBytes(8).toString("hex")}`,
         accountId: req.accountId!,
         assessmentId: assessment.id,
         answers: parsed,
-        score: scoreAssessment(assessment, parsed),
+        score: interpreted.score,
+        traits: interpreted.traits,
         createdAt: new Date(),
       });
       res.status(201).json({
-        run: {
-          id: run.id,
-          assessmentId: run.assessmentId,
-          score: run.score,
-          createdAt: run.createdAt.toISOString(),
-        },
+        run: presentRun(run),
       });
+    }),
+  );
+
+  router.get(
+    "/assessments/:id/results",
+    requireModule("assessments"),
+    asyncHandler(async (req: AppRequest, res) => {
+      const assessment = LOCAL_ASSESSMENTS.find((item) => item.id === req.params.id);
+      if (!assessment) throw new HttpError(404, "not_found", "Unknown assessment");
+      const runs = (await deps.assessmentRuns.listByAccount(req.accountId!)).filter(
+        (run) => run.assessmentId === assessment.id,
+      );
+      const presented = runs.map(presentRun);
+      res.json({
+        assessment: {
+          id: assessment.id,
+          title: assessment.title,
+          copy: assessment.copy,
+          duration: assessment.duration,
+          level: assessment.level,
+          track: assessment.track,
+        },
+        latest: presented[0] ?? null,
+        runs: presented,
+      });
+    }),
+  );
+
+  router.get(
+    "/runs/:runId",
+    requireModule("assessments"),
+    asyncHandler(async (req: AppRequest, res) => {
+      const run = await deps.assessmentRuns.getById(req.params.runId);
+      if (!run || run.accountId !== req.accountId) {
+        throw new HttpError(404, "not_found", "Result not found");
+      }
+      res.json({ run: presentRun(run) });
     }),
   );
 

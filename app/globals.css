@@ -2053,4 +2053,95 @@ body.app-nav-open { overflow: hidden; }
   .admin-row-actions { flex-direction: column; }
 }
 
+.profile-form {
+  display: grid;
+  gap: 16px;
+  max-width: 560px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.profile-form .admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.profile-form .admin-field input,
+.profile-form .admin-field select,
+.profile-form .admin-field textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--cream);
+  color: var(--fg);
+  font: inherit;
+  font-size: 16px;
+}
+.profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.profile-saved { color: var(--forest); }
+.test-card-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: auto;
+}
+.test-card-actions .btn { width: 100%; margin-top: 0; }
+.run-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  color: inherit;
+}
+.run-card span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.run-card strong {
+  font-family: var(--font-display);
+  color: var(--forest);
+}
+.results-page .result-score { text-align: left; }
+.results-disclaimer {
+  margin: 0;
+  padding: 14px 16px;
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface));
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  max-width: 68ch;
+}
+.trait-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 16px; max-width: 640px; }
+.trait-row { display: grid; gap: 6px; }
+.trait-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.trait-row-top strong { color: var(--forest); }
+.trait-track {
+  height: 10px;
+  background: var(--sand);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.trait-fill {
+  display: block;
+  height: 100%;
+  background: var(--forest);
+  transition: width 0.6s var(--ease);
+}
+
+@media (max-width: 640px) {
+  .profile-grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trait-fill { transition: none; }
+  .module-card:hover { transform: none; }
+  .btn:hover, .btn:active { transform: none; }
+}
+
+
 

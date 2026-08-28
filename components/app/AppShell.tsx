@@ -13,6 +13,10 @@ export type AppAccount = {
   createdAt: string;
   access: AccessSnapshot;
   communityRole?: "student" | "specialist" | "admin";
+  phone?: string | null;
+  gender?: string | null;
+  age?: number | null;
+  city?: string | null;
 };
 
 const NAV = [

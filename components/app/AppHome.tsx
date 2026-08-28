@@ -81,7 +81,13 @@ export function AppHome() {
         </div>
         <div className="folio-stat">
           <p className="meta">Last score</p>
-          <p className="num folio-num">{lastRun?.score ?? "—"}</p>
+          {lastRun ? (
+            <p className="num folio-num">
+              <Link href={`/app/assessments/${lastRun.assessmentId}/results?run=${lastRun.id}`}>{lastRun.score}</Link>
+            </p>
+          ) : (
+            <p className="num folio-num">—</p>
+          )}
         </div>
         <div className="folio-stat">
           <p className="meta">Threads</p>
@@ -110,10 +116,10 @@ export function AppHome() {
           <h2>Assessments</h2>
           <p>
             {lastRun
-              ? `Last run: ${titleFor(lastRun.assessmentId)} scored ${lastRun.score}.`
+              ? `Last run: ${titleFor(lastRun.assessmentId)} scored ${lastRun.score}. Open the sketch anytime.`
               : "Start with a workshop screen. Results stay in this workspace."}
           </p>
-          <span className="folio-cta">{lastRun ? "Open catalog" : "Take first screen"}</span>
+          <span className="folio-cta">{lastRun ? "Open catalog and results" : "Take first screen"}</span>
         </Link>
         <Link href="/app/community" className="module-card folio-card dash-in delay-3">
           <p className="eyebrow">Connect</p>
@@ -128,7 +134,7 @@ export function AppHome() {
         <Link href="/app/account" className="module-card folio-card dash-in delay-4">
           <p className="eyebrow">Billing</p>
           <h2>Account</h2>
-          <p>Trial, paid access, and which modules you can open.</p>
+          <p>Trial, paid access, and psychometric identity (phone, email, gender, age, city).</p>
           <span className="folio-cta">View access</span>
         </Link>
       </div>

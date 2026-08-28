@@ -12,6 +12,10 @@ function account(overrides: Partial<AccountRecord> = {}): AccountRecord {
     modules: { assessments: false, community: false },
     seats: 1,
     createdAt: new Date("2026-08-01T00:00:00.000Z"),
+    phone: null,
+    gender: null,
+    age: null,
+    city: null,
     ...overrides,
   };
 }
@@ -65,5 +69,23 @@ describe("community roles", () => {
     expect(canPostCommunityAnswer("admin")).toBe(true);
     expect(presentAccount(account()).communityRole).toBe("student");
     expect(presentAccount(account({ communityRole: "specialist" })).communityRole).toBe("specialist");
+  });
+});
+
+describe("presentAccount identity", () => {
+  it("exposes psychometric identity fields collected on the profile", () => {
+    const presented = presentAccount(
+      account({
+        phone: "+919876543210",
+        gender: "woman",
+        age: 29,
+        city: "Bengaluru",
+      }),
+    );
+    expect(presented.phone).toBe("+919876543210");
+    expect(presented.gender).toBe("woman");
+    expect(presented.age).toBe(29);
+    expect(presented.city).toBe("Bengaluru");
+    expect(presented.email).toBe("a@lokutara.test");
   });
 });

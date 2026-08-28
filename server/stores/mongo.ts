@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 import type { StoredAnalyticsEvent } from "../../lib/tracking/events";
 import type { AccountRecord, BillingSettings, ModuleFlags, Plan } from "../../lib/access/billing";
 import { DEFAULT_BILLING_SETTINGS } from "../../lib/access/billing";
-import type { LocalThread } from "../../lib/product/workspace";
+import { EMPTY_IDENTITY, identityFrom, isGenderIdentity } from "../../lib/access/profile";
+import type { LocalThread, TraitScore } from "../../lib/product/workspace";
 import type {
   AccountStore,
   AppSession,
@@ -120,6 +121,10 @@ const AccountSchema = new mongoose.Schema(
     },
     seats: { type: Number, default: 1 },
     communityRole: { type: String, enum: ["student", "specialist", "admin"], default: "student" },
+    phone: { type: String, default: null },
+    gender: { type: String, default: null },
+    age: { type: Number, default: null },
+    city: { type: String, default: null },
     createdAt: { type: Date, default: Date.now, index: true },
   },
   { collection: "app_accounts" },
@@ -179,6 +184,15 @@ const AssessmentRunSchema = new mongoose.Schema(
     assessmentId: { type: String, index: true },
     answers: { type: Object, default: {} },
     score: Number,
+    traits: [
+      {
+        id: String,
+        label: String,
+        score: Number,
+        max: Number,
+        note: String,
+      },
+    ],
     createdAt: { type: Date, default: Date.now, index: true },
   },
   { collection: "app_assessment_runs" },
@@ -378,6 +392,12 @@ export const mongoExperimentConfigStore: ExperimentConfigStore = {
 
 function mapAccount(row: Record<string, unknown>): AccountRecord {
   const modules = (row.modules as ModuleFlags | undefined) ?? { assessments: false, community: false };
+  const identity = identityFrom({
+    phone: (row.phone as string | null) ?? null,
+    gender: isGenderIdentity(String(row.gender || "")) ? (row.gender as AccountRecord["gender"]) : null,
+    age: typeof row.age === "number" ? row.age : null,
+    city: (row.city as string | null) ?? null,
+  });
   return {
     id: row.id as string,
     email: row.email as string,
@@ -393,6 +413,8 @@ function mapAccount(row: Record<string, unknown>): AccountRecord {
     communityRole:
       row.communityRole === "specialist" || row.communityRole === "admin" ? row.communityRole : "student",
     createdAt: new Date((row.createdAt as Date) || Date.now()),
+    ...EMPTY_IDENTITY,
+    ...identity,
   };
 }
 
@@ -527,12 +549,20 @@ export const mongoThreadStore: ThreadStore = {
 };
 
 function mapRun(row: Record<string, unknown>): AssessmentRun {
+  const traits = Array.isArray(row.traits) ? (row.traits as TraitScore[]) : [];
   return {
     id: row.id as string,
     accountId: row.accountId as string,
     assessmentId: row.assessmentId as string,
     answers: (row.answers as Record<string, unknown>) || {},
     score: Number(row.score || 0),
+    traits: traits.map((trait) => ({
+      id: String(trait.id || ""),
+      label: String(trait.label || ""),
+      score: Number(trait.score || 0),
+      max: Number(trait.max || 100),
+      note: String(trait.note || ""),
+    })),
     createdAt: new Date((row.createdAt as Date) || Date.now()),
   };
 }
@@ -541,6 +571,10 @@ export const mongoAssessmentRunStore: AssessmentRunStore = {
   async insert(run) {
     await AssessmentRunModel.create(run);
     return run;
+  },
+  async getById(id) {
+    const row = await AssessmentRunModel.findOne({ id }).lean();
+    return row ? mapRun(row as Record<string, unknown>) : null;
   },
   async listByAccount(accountId) {
     const rows = await AssessmentRunModel.find({ accountId }).sort({ createdAt: -1 }).lean();

@@ -184,6 +184,48 @@ describe("API", () => {
       });
     expect(submitted.status).toBe(201);
     expect(submitted.body.run.score).toBeGreaterThan(0);
+    expect(submitted.body.run.traits.length).toBeGreaterThan(0);
+    expect(submitted.body.run.disclaimer).toMatch(/not a licensed psychometric/i);
+    expect(submitted.body.run.resultsPath).toBe(
+      `/app/assessments/ocean/results?run=${submitted.body.run.id}`,
+    );
+
+    const results = await request(server)
+      .get("/api/workspace/assessments/ocean/results")
+      .set("Cookie", cookie);
+    expect(results.status).toBe(200);
+    expect(results.body.latest.id).toBe(submitted.body.run.id);
+    expect(results.body.runs[0].traits.map((row: { label: string }) => row.label)).toContain("Openness");
+
+    const one = await request(server)
+      .get(`/api/workspace/runs/${submitted.body.run.id}`)
+      .set("Cookie", cookie);
+    expect(one.status).toBe(200);
+    expect(one.body.run.score).toBe(submitted.body.run.score);
+
+    const profile = await request(server)
+      .patch("/api/auth/me")
+      .set("Cookie", cookie)
+      .send({
+        name: "Asha Rao",
+        email: "asha@lokutara.test",
+        phone: "+91 98765 43210",
+        gender: "woman",
+        age: 29,
+        city: "Bengaluru",
+      });
+    expect(profile.status).toBe(200);
+    expect(profile.body.account.phone).toBe("+919876543210");
+    expect(profile.body.account.gender).toBe("woman");
+    expect(profile.body.account.age).toBe(29);
+    expect(profile.body.account.city).toBe("Bengaluru");
+    expect(profile.body.account.email).toBe("asha@lokutara.test");
+
+    const badPhone = await request(server)
+      .patch("/api/auth/me")
+      .set("Cookie", cookie)
+      .send({ phone: "12" });
+    expect(badPhone.status).toBe(400);
 
     const me = await request(server).get("/api/auth/me").set("Cookie", cookie);
     expect(me.status).toBe(200);

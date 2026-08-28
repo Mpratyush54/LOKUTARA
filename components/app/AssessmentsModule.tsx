@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { AssessmentItem, LocalAssessment, RankItem, StoredAnswer } from "@/lib/product/workspace";
+import { relativeDay } from "@/lib/product/workspace";
 import { jsonFetch } from "./AppShell";
 
 type CatalogItem = {
@@ -16,9 +17,23 @@ type CatalogItem = {
   track: "psychology" | "placement";
   recommended: boolean;
   kind: "mcq" | "rank";
+  latestRunId?: string | null;
+  latestScore?: number | null;
 };
 
-type Run = { id: string; assessmentId: string; score: number; createdAt: string };
+type TraitScore = { id: string; label: string; score: number; max: number; note: string };
+
+type Run = {
+  id: string;
+  assessmentId: string;
+  title?: string;
+  score: number;
+  headline?: string;
+  disclaimer?: string;
+  traits?: TraitScore[];
+  createdAt: string;
+  resultsPath?: string;
+};
 
 export function AssessmentsCatalog() {
   const [items, setItems] = useState<CatalogItem[]>([]);
@@ -115,26 +130,41 @@ export function AssessmentsCatalog() {
             <p className="meta">
               {item.duration} · {item.itemCount} items · {item.kind === "rank" ? "Kolb ranking" : "MCQ"}
             </p>
-            <Link className="btn btn-primary" href={`/app/assessments/${item.id}`}>
-              Start test
-            </Link>
+            <div className="test-card-actions">
+              <Link className="btn btn-primary" href={`/app/assessments/${item.id}`}>
+                {item.latestRunId ? "Retake" : "Start test"}
+              </Link>
+              {item.latestRunId ? (
+                <Link className="btn btn-secondary" href={`/app/assessments/${item.id}/results`}>
+                  View results
+                </Link>
+              ) : null}
+            </div>
           </article>
         ))}
       </div>
       {!filtered.length ? <p className="product-empty">No assessments match that filter.</p> : null}
       {runs.length ? (
         <section>
-          <h2 className="admin-h2">Your recent runs</h2>
+          <h2 className="admin-h2">Your results</h2>
+          <p className="meta">Saved sketches from this dashboard — conversation tools, not licensed psychometrics.</p>
           <ul className="run-list">
-            {runs.slice(0, 8).map((run) => (
+            {runs.slice(0, 12).map((run) => (
               <li key={run.id}>
-                <span>{run.assessmentId}</span>
-                <span className="num">{run.score}</span>
+                <Link className="run-card" href={run.resultsPath || `/app/assessments/${run.assessmentId}/results?run=${run.id}`}>
+                  <span>
+                    <strong>{run.title || run.assessmentId}</strong>
+                    <span className="meta">{relativeDay(run.createdAt)}</span>
+                  </span>
+                  <span className="num">{run.score}</span>
+                </Link>
               </li>
             ))}
           </ul>
         </section>
-      ) : null}
+      ) : (
+        <p className="product-empty">No results yet. Finish a screen and it will show up here.</p>
+      )}
     </div>
   );
 }
@@ -204,7 +234,6 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, StoredAnswer>>({});
   const [complete, setComplete] = useState(false);
-  const [score, setScore] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const bufferKey = `lokutara_test_${assessmentId}`;
@@ -277,7 +306,9 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
     } catch {
       /* ignore */
     }
-    setScore(body.run.score);
+    const resultsPath =
+      body.run?.resultsPath || `/app/assessments/${assessmentId}/results?run=${body.run?.id ?? ""}`;
+    router.push(resultsPath);
   }
 
   if (error && !assessment) {
@@ -298,29 +329,6 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
   const item: AssessmentItem | undefined = assessment.items[index];
   const progress = Math.round(((index + 1) / assessment.items.length) * 100);
   const answered = Object.keys(answers).length;
-
-  if (score !== null) {
-    return (
-      <div className="runner-stage">
-        <section className="runner runner-result">
-          <p className="eyebrow">Result</p>
-          <h1>Assessment complete</h1>
-          <p className="result-score num">{score}</p>
-          <p className="lead">
-            {assessment.title} · {answered} of {assessment.items.length} answered. A conversation sketch, not a diagnostic.
-          </p>
-          <div className="runner-nav">
-            <Link className="btn btn-primary" href="/app/assessments">
-              Back to assessments
-            </Link>
-            <button type="button" className="btn btn-secondary" onClick={() => { setScore(null); setComplete(false); }}>
-              Review answers
-            </button>
-          </div>
-        </section>
-      </div>
-    );
-  }
 
   if (complete) {
     return (
@@ -434,5 +442,146 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
         </div>
       </section>
     </div>
+  );
+}
+
+function TraitBars({ traits }: { traits: TraitScore[] }) {
+  if (!traits.length) return null;
+  return (
+    <ul className="trait-list">
+      {traits.map((trait) => {
+        const pct = trait.max ? Math.max(0, Math.min(100, Math.round((trait.score / trait.max) * 100))) : 0;
+        return (
+          <li key={trait.id} className="trait-row">
+            <div className="trait-row-top">
+              <strong>{trait.label}</strong>
+              <span className="num">{trait.score}</span>
+            </div>
+            <div className="trait-track" aria-hidden="true">
+              <span className="trait-fill" style={{ width: `${pct}%` }} />
+            </div>
+            <p className="meta">{trait.note}</p>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+export function AssessmentResults({ assessmentId }: { assessmentId: string }) {
+  const searchParams = useSearchParams();
+  const runQuery = searchParams.get("run");
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [copy, setCopy] = useState("");
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [selected, setSelected] = useState<Run | null>(null);
+
+  useEffect(() => {
+    if (!assessmentId) return;
+    void (async () => {
+      const { res, body } = await jsonFetch(`/api/workspace/assessments/${assessmentId}/results`);
+      if (res.status === 402) {
+        setError("This module is not on your plan.");
+        setReady(true);
+        return;
+      }
+      if (!res.ok) {
+        setError(body.message || "Could not load results");
+        setReady(true);
+        return;
+      }
+      const list = (body.runs || []) as Run[];
+      setTitle(body.assessment?.title || assessmentId);
+      setCopy(body.assessment?.copy || "");
+      setRuns(list);
+      const match = runQuery ? list.find((run) => run.id === runQuery) : list[0];
+      if (match) {
+        setSelected(match);
+        setReady(true);
+        return;
+      }
+      if (runQuery) {
+        const one = await jsonFetch(`/api/workspace/runs/${runQuery}`);
+        if (one.res.ok) {
+          setSelected(one.body.run as Run);
+          setReady(true);
+          return;
+        }
+      }
+      setSelected(list[0] ?? null);
+      setReady(true);
+    })();
+  }, [assessmentId, runQuery]);
+
+  if (error) return <p className="app-error">{error}</p>;
+  if (!ready) {
+    return (
+      <div className="module-stack" aria-busy="true">
+        <div className="app-skeleton app-skeleton-hero" />
+        <div className="app-skeleton app-skeleton-card" />
+      </div>
+    );
+  }
+
+  if (!selected) {
+    return (
+      <section className="module-stack results-page">
+        <p className="eyebrow">Results</p>
+        <h1>{title || "Assessment"}</h1>
+        <p className="lead">You have not finished this screen yet. Results stay in this dashboard after you submit.</p>
+        <div className="runner-nav">
+          <Link className="btn btn-primary" href={`/app/assessments/${assessmentId}`}>
+            Start test
+          </Link>
+          <Link className="btn btn-secondary" href="/app/assessments">
+            All assessments
+          </Link>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="module-stack results-page">
+      <p className="eyebrow">Results</p>
+      <h1>{selected.title || title}</h1>
+      <p className="results-disclaimer">{selected.disclaimer}</p>
+      <p className="lead">{selected.headline}</p>
+      <p className="result-score num">{selected.score}</p>
+      <p className="meta">
+        Average self-report · {relativeDay(selected.createdAt)} · {copy || "A conversation sketch, not a diagnostic."}
+      </p>
+      <TraitBars traits={selected.traits || []} />
+      <div className="runner-nav">
+        <Link className="btn btn-primary" href={`/app/assessments/${assessmentId}`}>
+          Retake
+        </Link>
+        <Link className="btn btn-secondary" href="/app/assessments">
+          All assessments
+        </Link>
+      </div>
+      {runs.length > 1 ? (
+        <section>
+          <h2 className="admin-h2">Earlier sketches</h2>
+          <ul className="run-list">
+            {runs
+              .filter((run) => run.id !== selected.id)
+              .map((run) => (
+                <li key={run.id}>
+                  <Link className="run-card" href={`/app/assessments/${assessmentId}/results?run=${run.id}`}>
+                    <span>
+                      <strong>{relativeDay(run.createdAt)}</strong>
+                      <span className="meta">{run.headline}</span>
+                    </span>
+                    <span className="num">{run.score}</span>
+                  </Link>
+                </li>
+              ))}
+          </ul>
+        </section>
+      ) : null}
+    </section>
   );
 }
