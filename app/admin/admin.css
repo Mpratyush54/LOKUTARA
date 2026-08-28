@@ -46,12 +46,18 @@
   margin-bottom: 24px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: color-mix(in oklch, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px);
 }
 
 .admin-tabs button {
   background: transparent;
   border: 0;
-  padding: 8px 12px;
+  min-height: 44px;
+  padding: 10px 14px;
   color: var(--muted);
   font-size: 14px;
   border-radius: var(--radius);
@@ -322,6 +328,10 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+
   .admin-experiment > header {
     flex-direction: column;
   }
@@ -334,4 +344,13 @@
 .admin-skeleton {
   min-height: 220px;
   margin-bottom: 16px;
+}
+
+.admin-skeleton-page { display: flex; flex-direction: column; gap: 16px; }
+.admin-skeleton-title { min-height: 72px; max-width: 420px; }
+.admin-skeleton-stat { min-height: 88px; }
+.admin-skeleton-chart { min-height: 200px; }
+
+.admin-shell {
+  overflow-x: clip;
 }

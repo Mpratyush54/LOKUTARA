@@ -35,9 +35,15 @@ export function TrendChart({
         <span>{label}</span>
         <strong className="num">{last}</strong>
       </figcaption>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} over ${points.length} days`}>
-        <path d={area} className="chart-fill" />
-        <path d={line} className="chart-line" />
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} over ${points.length} days`} preserveAspectRatio="none" className="chart-svg">
+        {coords.length > 1 ? (
+          <>
+            <path d={area} className="chart-fill" />
+            <path d={line} className="chart-line" />
+          </>
+        ) : (
+          <path d={`M${pad} ${height - pad} H${width - pad}`} className="chart-line" />
+        )}
       </svg>
     </figure>
   );

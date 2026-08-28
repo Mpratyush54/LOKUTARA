@@ -241,8 +241,22 @@ export function AdminDashboard() {
 
   if (authed === null) {
     return (
-      <main className="admin-shell">
-        <p className="meta">Checking session…</p>
+      <main className="admin-shell admin-ops" aria-busy="true" data-testid="admin-skeleton">
+        <div className="admin-skeleton-page">
+          <div className="admin-skeleton admin-skeleton-title" />
+          <div className="admin-stat-grid">
+            <div className="admin-skeleton admin-skeleton-stat" />
+            <div className="admin-skeleton admin-skeleton-stat" />
+            <div className="admin-skeleton admin-skeleton-stat" />
+            <div className="admin-skeleton admin-skeleton-stat" />
+            <div className="admin-skeleton admin-skeleton-stat" />
+            <div className="admin-skeleton admin-skeleton-stat" />
+          </div>
+          <div className="chart-grid">
+            <div className="admin-skeleton admin-skeleton-chart" />
+            <div className="admin-skeleton admin-skeleton-chart" />
+          </div>
+        </div>
       </main>
     );
   }
@@ -342,7 +356,20 @@ export function AdminDashboard() {
 
       {tab === "overview" ? (
         <section className="admin-panel">
-          {overviewLoading && !overview ? <div className="admin-skeleton" /> : null}
+          {overviewLoading && !overview ? (
+            <div className="admin-skeleton-page" aria-busy="true">
+              <div className="admin-stat-grid">
+                <div className="admin-skeleton admin-skeleton-stat" />
+                <div className="admin-skeleton admin-skeleton-stat" />
+                <div className="admin-skeleton admin-skeleton-stat" />
+                <div className="admin-skeleton admin-skeleton-stat" />
+              </div>
+              <div className="chart-grid">
+                <div className="admin-skeleton admin-skeleton-chart" />
+                <div className="admin-skeleton admin-skeleton-chart" />
+              </div>
+            </div>
+          ) : null}
           {overview && metrics ? (
             <>
               <div className="admin-stat-grid">

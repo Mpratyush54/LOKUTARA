@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { AccessSnapshot } from "@/lib/access/billing";
 
 export type AppAccount = {
@@ -31,6 +31,12 @@ async function jsonFetch(path: string, init?: RequestInit) {
   return { res, body };
 }
 
+const AppAccountContext = createContext<AppAccount | null>(null);
+
+export function useAppAccount() {
+  return useContext(AppAccountContext);
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [account, setAccount] = useState<AppAccount | null>(null);
@@ -47,6 +53,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     void loadMe();
   }, [loadMe]);
 
+  useEffect(() => {
+    document.body.classList.toggle("app-nav-open", menuOpen);
+    return () => document.body.classList.remove("app-nav-open");
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") setMenuOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
   async function logout() {
     await jsonFetch("/api/auth/logout", { method: "POST" });
     setAccount(null);
@@ -55,9 +79,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!ready) {
     return (
-      <div className="app-shell">
-        <div className="app-skeleton" aria-busy="true">
-          Loading workspace…
+      <div className="app-shell" data-testid="app-skeleton" aria-busy="true">
+        <aside className="app-sidebar" aria-hidden="true" />
+        <div className="app-main">
+          <div className="app-content">
+            <div className="app-skeleton app-skeleton-hero" />
+            <div className="dash-stats">
+              <div className="app-skeleton app-skeleton-stat" />
+              <div className="app-skeleton app-skeleton-stat" />
+              <div className="app-skeleton app-skeleton-stat" />
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -89,47 +121,58 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="app-shell">
-      <aside className={`app-sidebar${menuOpen ? " is-open" : ""}`}>
-        <div className="app-brand">
-          <Link href="/app">Lokutara</Link>
-          <p className="meta">One product</p>
-        </div>
-        <nav aria-label="Product">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={item.match(pathname) ? "is-current" : undefined}
-              aria-current={item.match(pathname) ? "page" : undefined}
-              onClick={() => setMenuOpen(false)}
+    <AppAccountContext.Provider value={account}>
+      <div className="app-shell">
+        <aside id="app-sidebar" className={`app-sidebar${menuOpen ? " is-open" : ""}`}>
+          <div className="app-brand">
+            <Link href="/app">Lokutara</Link>
+            <p className="meta">One product</p>
+          </div>
+          <nav aria-label="Product">
+            {NAV.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={item.match(pathname) ? "is-current" : undefined}
+                aria-current={item.match(pathname) ? "page" : undefined}
+                onClick={() => setMenuOpen(false)}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <div className="app-sidebar-foot">
+            <p className="meta">{account.name}</p>
+            <p className="meta app-plan-pill">{account.access.status}</p>
+            <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
+              Sign out
+            </button>
+          </div>
+        </aside>
+        <div className="app-main">
+          <header className="app-mobile-bar">
+            <button
+              type="button"
+              className={`nav-toggle app-menu-btn${menuOpen ? " is-open" : ""}`}
+              aria-expanded={menuOpen}
+              aria-controls="app-sidebar"
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              onClick={() => setMenuOpen((v) => !v)}
             >
-              {item.label}
+              <span />
+              <span />
+              <span />
+            </button>
+            <Link href="/app" className="logo">
+              Lokutara
             </Link>
-          ))}
-        </nav>
-        <div className="app-sidebar-foot">
-          <p className="meta">{account.name}</p>
-          <p className="meta app-plan-pill">{account.access.status}</p>
-          <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
-            Sign out
-          </button>
+            <span className="meta app-plan-pill">{account.access.status}</span>
+          </header>
+          {menuOpen ? <button type="button" className="app-scrim" aria-label="Close menu" onClick={() => setMenuOpen(false)} /> : null}
+          <div className="app-content">{children}</div>
         </div>
-      </aside>
-      <div className="app-main">
-        <header className="app-mobile-bar">
-          <button type="button" className="app-menu-btn" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}>
-            Menu
-          </button>
-          <Link href="/app" className="logo">
-            Lokutara
-          </Link>
-          <span className="meta app-plan-pill">{account.access.status}</span>
-        </header>
-        {menuOpen ? <button type="button" className="app-scrim" aria-label="Close menu" onClick={() => setMenuOpen(false)} /> : null}
-        <div className="app-content">{children}</div>
       </div>
-    </div>
+    </AppAccountContext.Provider>
   );
 }
 

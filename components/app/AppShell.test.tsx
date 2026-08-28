@@ -37,6 +37,17 @@ describe("AppShell", () => {
     expect(screen.queryByText("Secret module")).not.toBeInTheDocument();
   });
 
+  it("shows a layout skeleton before the session resolves", () => {
+    vi.mocked(fetch).mockReturnValue(new Promise(() => {}) as Promise<Response>);
+    render(
+      <AppShell>
+        <p>Inside</p>
+      </AppShell>,
+    );
+    expect(screen.getByTestId("app-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText("Inside")).not.toBeInTheDocument();
+  });
+
   it("renders one dashboard nav, not separate product sites", async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,

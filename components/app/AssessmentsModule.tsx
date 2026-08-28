@@ -24,6 +24,7 @@ export function AssessmentsCatalog() {
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const [search, setSearch] = useState("");
   const [track, setTrack] = useState<"all" | "psychology" | "placement">("all");
   const [tab, setTab] = useState<"recommended" | "all">("all");
@@ -33,14 +34,17 @@ export function AssessmentsCatalog() {
       const { res, body } = await jsonFetch("/api/workspace/assessments");
       if (res.status === 402) {
         setError("This module is not on your plan.");
+        setReady(true);
         return;
       }
       if (!res.ok) {
         setError(body.message || "Could not load assessments");
+        setReady(true);
         return;
       }
       setItems(body.assessments || []);
       setRuns(body.runs || []);
+      setReady(true);
     })();
   }, []);
 
@@ -55,6 +59,17 @@ export function AssessmentsCatalog() {
   }, [items, search, track, tab]);
 
   if (error) return <p className="app-error">{error}</p>;
+  if (!ready) {
+    return (
+      <div className="module-stack" aria-busy="true">
+        <div className="app-skeleton app-skeleton-hero" />
+        <div className="module-grid">
+          <div className="app-skeleton app-skeleton-card" />
+          <div className="app-skeleton app-skeleton-card" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="module-stack">
@@ -265,7 +280,7 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
   }
 
   if (error && !assessment) return <p className="app-error">{error}</p>;
-  if (!assessment) return <p className="meta">Loading test…</p>;
+  if (!assessment) return <div className="app-skeleton app-skeleton-hero" aria-busy="true" />;
 
   const item: AssessmentItem | undefined = assessment.items[index];
   const progress = Math.round(((index + 1) / assessment.items.length) * 100);

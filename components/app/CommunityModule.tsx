@@ -63,6 +63,7 @@ export function CommunityExplore() {
   const [tag, setTag] = useState("");
   const [sort, setSort] = useState<"latest" | "unanswered">("latest");
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
 
   async function load(nextQ = q, nextTag = tag, nextSort = sort) {
     const params = new URLSearchParams();
@@ -72,19 +73,33 @@ export function CommunityExplore() {
     const { res, body } = await jsonFetch(`/api/workspace/community?${params.toString()}`);
     if (res.status === 402) {
       setError("Community is not on your plan.");
+      setReady(true);
       return;
     }
     if (!res.ok) {
       setError(body.message || "Could not load threads");
+      setReady(true);
       return;
     }
     setThreads(body.threads || []);
+    setReady(true);
   }
 
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (error) return <p className="app-error">{error}</p>;
+  if (!ready) {
+    return (
+      <div className="module-stack" aria-busy="true">
+        <div className="app-skeleton app-skeleton-hero" />
+        <div className="app-skeleton app-skeleton-card" />
+        <div className="app-skeleton app-skeleton-card" />
+      </div>
+    );
+  }
 
   return (
     <div className="module-stack">

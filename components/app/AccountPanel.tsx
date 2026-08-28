@@ -2,19 +2,26 @@
 
 import { useEffect, useState } from "react";
 import type { AppAccount } from "./AppShell";
-import { jsonFetch } from "./AppShell";
+import { jsonFetch, useAppAccount } from "./AppShell";
 
 export function AccountPanel() {
-  const [account, setAccount] = useState<AppAccount | null>(null);
+  const fromShell = useAppAccount();
+  const [account, setAccount] = useState<AppAccount | null>(fromShell);
 
   useEffect(() => {
+    if (fromShell) {
+      setAccount(fromShell);
+      return;
+    }
     void (async () => {
       const { res, body } = await jsonFetch("/api/auth/me");
       if (res.ok) setAccount(body.account);
     })();
-  }, []);
+  }, [fromShell]);
 
-  if (!account) return <p className="meta">Loading account…</p>;
+  if (!account) {
+    return <div className="app-skeleton app-skeleton-hero" aria-busy="true" data-testid="account-skeleton" />;
+  }
 
   return (
     <section className="module-stack">
