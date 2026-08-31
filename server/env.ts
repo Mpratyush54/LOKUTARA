@@ -17,6 +17,9 @@ export type AppEnv = {
   testsApiUrl: string | null;
   /** Forum API (same product, separate process). */
   forumApiUrl: string | null;
+  razorpayKeyId: string | null;
+  razorpayKeySecret: string | null;
+  razorpayWebhookSecret: string | null;
 };
 
 function nonempty(value: string | undefined): string | null {
@@ -51,6 +54,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     nonempty(source.ADMIN_PASSWORD) || nonempty(source.ADMIN_DASHBOARD_SECRET);
   const testsApiUrl = nonempty(source.TESTS_API_URL);
   const forumApiUrl = nonempty(source.FORUM_API_URL);
+  const razorpayKeyId = nonempty(source.RAZORPAY_KEY_ID);
+  const razorpayKeySecret = nonempty(source.RAZORPAY_KEY_SECRET);
+  const razorpayWebhookSecret = nonempty(source.RAZORPAY_WEBHOOK_SECRET);
   const warnings: string[] = [];
 
   if (nodeEnv === "production" && !mongodbUri) {
@@ -69,6 +75,10 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     );
   }
 
+  if (nodeEnv === "production" && (!razorpayKeyId || !razorpayKeySecret)) {
+    warnings.push("RAZORPAY_KEY_ID/SECRET unset; invoices stay draft or offline until keys are set.");
+  }
+
   return {
     port: parsePort(source.PORT, 3000),
     nodeEnv,
@@ -79,6 +89,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     adminDashboardSecret,
     testsApiUrl,
     forumApiUrl,
+    razorpayKeyId,
+    razorpayKeySecret,
+    razorpayWebhookSecret,
     warnings,
   };
 }

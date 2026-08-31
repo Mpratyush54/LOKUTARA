@@ -4,6 +4,19 @@ import { createApiApp } from "../server/app";
 import { createMemoryStores } from "../server/stores/memory";
 import { CONSENT_COOKIE } from "../lib/tracking/consent";
 
+function signupPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "Asha Rao",
+    email: "asha@lokutara.test",
+    password: "pass-word",
+    phone: "9876543210",
+    age: 29,
+    city: "Bengaluru",
+    organisation: "Lokutara",
+    ...overrides,
+  };
+}
+
 function app() {
   const stores = createMemoryStores();
   return {
@@ -19,6 +32,7 @@ function app() {
       billing: stores.billingSettingsStore,
       threads: stores.threadStore,
       assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
       adminSecret: "test-admin-secret",
       health: {
         storeBackend: "memory",
@@ -152,14 +166,14 @@ describe("API", () => {
     const denied = await request(server).get("/api/workspace/assessments");
     expect(denied.status).toBe(401);
 
-    const signup = await request(server).post("/api/auth/signup").send({
-      name: "Asha Rao",
-      email: "asha@lokutara.test",
-      password: "pass-word",
-    });
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload());
     expect(signup.status).toBe(201);
     expect(signup.body.account.access.status).toBe("trial");
     expect(signup.body.account.access.canEnterApp).toBe(true);
+    expect(signup.body.account.phone).toBe("9876543210");
+    expect(signup.body.account.age).toBe(29);
+    expect(signup.body.account.city).toBe("Bengaluru");
+    expect(signup.body.account.organisation).toBe("Lokutara");
     const cookie = signup.headers["set-cookie"];
     expect(cookie).toBeTruthy();
 
@@ -188,6 +202,38 @@ describe("API", () => {
     const me = await request(server).get("/api/auth/me").set("Cookie", cookie);
     expect(me.status).toBe(200);
     expect(me.body.account.email).toBe("asha@lokutara.test");
+    expect(me.body.account.phone).toBe("9876543210");
+    expect(me.body.account.city).toBe("Bengaluru");
+  });
+
+  it("lets a signed-in account update profile details", async () => {
+    const { server } = app();
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload());
+    const cookie = signup.headers["set-cookie"];
+    const updated = await request(server).patch("/api/auth/me").set("Cookie", cookie).send({
+      name: "Asha R",
+      phone: "9988776655",
+      age: 31,
+      city: "Mysuru",
+      organisation: "Lokutara Labs",
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.account.name).toBe("Asha R");
+    expect(updated.body.account.phone).toBe("9988776655");
+    expect(updated.body.account.age).toBe(31);
+    expect(updated.body.account.city).toBe("Mysuru");
+    expect(updated.body.account.organisation).toBe("Lokutara Labs");
+  });
+
+  it("rejects signup when profile details are missing", async () => {
+    const { server } = app();
+    const res = await request(server).post("/api/auth/signup").send({
+      name: "Asha Rao",
+      email: "incomplete@lokutara.test",
+      password: "pass-word",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/phone/i);
   });
 
   it("returns 402 when the trial flag is off", async () => {
@@ -196,12 +242,14 @@ describe("API", () => {
       autoTrialOnSignup: false,
       defaultTrialDays: 14,
       trialModules: { assessments: true, community: true },
+      legalName: "Lokutara",
+      gstin: "",
+      address: "",
+      gstRate: 18,
     });
-    const signup = await request(server).post("/api/auth/signup").send({
-      name: "No Trial",
-      email: "locked@lokutara.test",
-      password: "pass-word",
-    });
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ name: "No Trial", email: "locked@lokutara.test" }),
+    );
     expect(signup.body.account.access.canEnterApp).toBe(false);
     const cookie = signup.headers["set-cookie"];
     const blocked = await request(server).get("/api/workspace/home").set("Cookie", cookie);
@@ -218,11 +266,9 @@ describe("API", () => {
 
   it("lets students ask but only specialists post answers, and returns reply rules", async () => {
     const { server, stores } = app();
-    const signup = await request(server).post("/api/auth/signup").send({
-      name: "Asha Rao",
-      email: "asha-forum@lokutara.test",
-      password: "pass-word",
-    });
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ email: "asha-forum@lokutara.test" }),
+    );
     const cookie = signup.headers["set-cookie"];
     expect(signup.body.account.communityRole).toBe("student");
 

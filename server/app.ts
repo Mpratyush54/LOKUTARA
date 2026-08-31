@@ -7,6 +7,7 @@ import { createStubRouter } from "./routes/stubs";
 import { createProductRouter, createProductUpstream } from "./routes/product";
 import type { ProductUpstream } from "../lib/product/upstream";
 import { createAdminRouter } from "./routes/admin";
+import { createRazorpayWebhookRouter } from "./routes/webhooks";
 import { createExperimentsRouter } from "./routes/experiments";
 import { createAuthRouter } from "./routes/auth";
 import { createWorkspaceRouter } from "./routes/workspace";
@@ -19,6 +20,7 @@ import type {
   BillingSettingsStore,
   EventStore,
   ExperimentConfigStore,
+  InvoiceStore,
   LeadStore,
   RateLimiter,
   SessionStore,
@@ -27,6 +29,7 @@ import type {
   VisitorStore,
 } from "./stores/memory";
 import type { RedisStatus } from "./stores/redis";
+import type { RazorpayClient } from "./payments/razorpay";
 
 export type HealthDeps = {
   storeBackend: StoreBackend;
@@ -54,6 +57,9 @@ export type ApiDeps = {
   billing?: BillingSettingsStore;
   threads?: ThreadStore;
   assessmentRuns?: AssessmentRunStore;
+  invoices?: InvoiceStore;
+  razorpay?: RazorpayClient;
+  razorpayWebhookSecret?: string | null;
 };
 
 export function createApiApp(deps: ApiDeps): Express {
@@ -67,8 +73,18 @@ export function createApiApp(deps: ApiDeps): Express {
   const billing = deps.billing ?? fallback.billingSettingsStore;
   const threads = deps.threads ?? fallback.threadStore;
   const assessmentRuns = deps.assessmentRuns ?? fallback.assessmentRunStore;
+  const invoices = deps.invoices ?? fallback.invoiceStore;
 
   app.use(cors({ origin: true, credentials: true }));
+  app.use(
+    "/api/webhooks/razorpay",
+    express.raw({ type: "*/*" }),
+    createRazorpayWebhookRouter({
+      invoices,
+      accounts,
+      webhookSecret: deps.razorpayWebhookSecret ?? null,
+    }),
+  );
   app.use(express.json({ limit: "32kb" }));
   app.use(cookieParser());
 
@@ -88,6 +104,7 @@ export function createApiApp(deps: ApiDeps): Express {
             "discovery_leads",
             "first_party_analytics",
             "app",
+            "billing",
           ],
           later: ["chat_product"],
         },
@@ -136,6 +153,8 @@ export function createApiApp(deps: ApiDeps): Express {
       billing,
       threads,
       assessmentRuns,
+      invoices,
+      razorpay: deps.razorpay,
     }),
   );
   app.use("/api/product", createProductRouter(deps.product ?? createProductUpstream({})));

@@ -12,7 +12,7 @@ describe("dailySeries", () => {
     ] as StoredAnalyticsEvent[];
     const series = dailySeries(events, 3, now);
     expect(series).toHaveLength(3);
-    expect(series[2]).toEqual({ date: "2026-08-28", views: 1, leads: 0 });
-    expect(series[1]).toEqual({ date: "2026-08-27", views: 1, leads: 1 });
+    expect(series[2]).toEqual({ date: "2026-08-28", views: 1, leads: 0, signups: 0, revenue: 0 });
+    expect(series[1]).toEqual({ date: "2026-08-27", views: 1, leads: 1, signups: 0, revenue: 0 });
   });
 });

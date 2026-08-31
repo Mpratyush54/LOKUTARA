@@ -5,7 +5,11 @@ import type { MetricsWindow } from "@/lib/tracking/metrics";
 import type { ExperimentKey, ExperimentVariant } from "@/lib/tracking/experiment";
 import type { AccessSnapshot, BillingSettings } from "@/lib/access/billing";
 import type { DayPoint } from "@/lib/charts/series";
+import type { CommerceSnapshot } from "@/lib/billing/commerce";
+import { formatInrFromPaise } from "@/lib/billing/invoices";
+import { LOCAL_ASSESSMENTS } from "@/lib/product/workspace";
 import { FunnelBars, TrendChart } from "@/components/charts/TrendChart";
+import { BillingModule } from "@/components/admin/BillingModule";
 
 type AdminLead = {
   id: string;
@@ -35,6 +39,10 @@ type AccountRow = {
   id: string;
   email: string;
   name: string;
+  phone?: string | null;
+  age?: number | null;
+  city?: string | null;
+  organisation?: string | null;
   seats: number;
   createdAt: string;
   access: AccessSnapshot;
@@ -44,11 +52,35 @@ type AccountRow = {
 type OverviewPayload = {
   metrics: MetricsWindow;
   series: DayPoint[];
+  commerce: CommerceSnapshot;
+  razorpayConfigured?: boolean;
   accounts: { none: number; trial: number; paid: number; expired: number; total: number };
   workspace: { runs: number; threads: number; replies: number };
+  recent: {
+    leads: AdminLead[];
+    people: AccountRow[];
+    runs: Array<{ id: string; accountName: string; assessmentId: string; score: number; createdAt: string }>;
+    threads: Array<{
+      id: string;
+      title: string;
+      authorName: string;
+      answerCount: number;
+      views: number;
+      createdAt?: string;
+    }>;
+    invoices?: Array<{
+      id: string;
+      number: string;
+      customerName: string;
+      label: string;
+      status: string;
+      totalLabel: string;
+      createdAt: string;
+    }>;
+  };
 };
 
-type Tab = "overview" | "leads" | "assessments" | "community" | "trials" | "experiments";
+type Tab = "overview" | "leads" | "assessments" | "community" | "trials" | "billing" | "experiments";
 
 function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
@@ -56,6 +88,12 @@ function pct(n: number): string {
 
 function fmt(n: number): string {
   return new Intl.NumberFormat("en-IN").format(n);
+}
+
+function momLabel(pct: number | null): string {
+  if (pct == null) return "no sales last month";
+  const n = Math.round(pct * 100);
+  return `${n >= 0 ? "+" : ""}${n}% vs last month`;
 }
 
 function when(iso: string): string {
@@ -69,6 +107,10 @@ function when(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function assessmentTitle(id: string) {
+  return LOCAL_ASSESSMENTS.find((item) => item.id === id)?.title ?? id;
 }
 
 async function adminFetch(path: string, init?: RequestInit) {
@@ -91,7 +133,7 @@ export function AdminDashboard() {
   const [tab, setTab] = useState<Tab>("overview");
   const [error, setError] = useState<string | null>(null);
   const [overview, setOverview] = useState<OverviewPayload | null>(null);
-  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewLoading, setOverviewLoading] = useState(true);
   const [leads, setLeads] = useState<AdminLead[] | null>(null);
   const [workspace, setWorkspace] = useState<{
     runs: Array<{ id: string; accountName: string; assessmentId: string; score: number; createdAt: string }>;
@@ -102,6 +144,7 @@ export function AdminDashboard() {
   const [experiments, setExperiments] = useState<ExperimentRow[] | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [trialDays, setTrialDays] = useState(14);
+  const [billingTick, setBillingTick] = useState(0);
 
   const checkSession = useCallback(async () => {
     const { res, body } = await adminFetch("/api/admin/session");
@@ -136,8 +179,8 @@ export function AdminDashboard() {
   }, [checkSession]);
 
   useEffect(() => {
-    if (authed && tab === "overview") void loadOverview();
-  }, [authed, tab, loadOverview]);
+    if (authed) void loadOverview();
+  }, [authed, loadOverview]);
 
   useEffect(() => {
     if (!authed) return;
@@ -153,7 +196,7 @@ export function AdminDashboard() {
         if (res.ok) setWorkspace(body);
       })();
     }
-    if (tab === "trials" && (accounts === null || billing === null)) {
+    if ((tab === "trials" || tab === "billing") && (accounts === null || billing === null)) {
       void (async () => {
         const [a, b] = await Promise.all([adminFetch("/api/admin/accounts"), adminFetch("/api/admin/billing")]);
         if (a.res.ok) setAccounts(a.body.accounts || []);
@@ -190,6 +233,7 @@ export function AdminDashboard() {
     await adminFetch("/api/admin/logout", { method: "POST" });
     setAuthed(false);
     setOverview(null);
+    setOverviewLoading(true);
     setLeads(null);
     setWorkspace(null);
     setAccounts(null);
@@ -237,7 +281,7 @@ export function AdminDashboard() {
       return;
     }
     setAccounts((prev) => (prev || []).map((row) => (row.id === id ? body.account : row)));
-    setOverview(null);
+    void loadOverview();
   }
 
   async function setCommunityRole(id: string, communityRole: "student" | "specialist" | "admin") {
@@ -292,19 +336,19 @@ export function AdminDashboard() {
   if (!authed) {
     return (
       <main className="admin-shell">
-        <form className="admin-gate" onSubmit={onLogin}>
+        <form className="admin-gate dash-in" onSubmit={onLogin}>
           <p className="eyebrow">Founder ops</p>
-          <h1>Lokutara console</h1>
-          <p className="lead">One admin for the funnel, trials, assessments, and community — not three products.</p>
+          <h1>Lokutara admin</h1>
+          <p className="lead">Sign in to see leads, signups, assessment runs, and community activity.</p>
           {emailRequired ? (
             <label className="admin-field">
               <span className="meta">Email</span>
-              <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
             </label>
           ) : null}
           <label className="admin-field">
             <span className="meta">Password</span>
-            <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </label>
           {loginError ? <p className="admin-error">{loginError}</p> : null}
           <button type="submit" className="btn btn-primary admin-gate-submit">
@@ -316,14 +360,33 @@ export function AdminDashboard() {
   }
 
   const metrics = overview?.metrics;
+  const recentPeople = overview?.recent?.people || [];
+  const recentLeads = overview?.recent?.leads || [];
+  const recentRuns = overview?.recent?.runs || [];
+  const recentThreads = overview?.recent?.threads || [];
+  const recentInvoices = overview?.recent?.invoices || [];
+  const commerce = overview?.commerce;
+  const snapshotLine = overview
+    ? `${formatInrFromPaise(overview.commerce?.revenueThisMonth || 0)} this month · ${fmt(overview.accounts.total)} people · ${fmt(overview.workspace.runs)} screens`
+    : "Leads, signups, screens, bills, and community — one console.";
+  const briefTitle = !overview
+    ? "Loading live ops"
+    : overview.accounts.total === 0
+      ? "Waiting on the first signup"
+      : `${fmt(overview.accounts.total)} ${overview.accounts.total === 1 ? "person" : "people"} on Lokutara`;
+  const briefCopy = !overview || !metrics
+    ? "Leads, trials, assessment runs, and community threads land here."
+    : metrics.uniqueVisitors === 0 && overview.accounts.total === 0
+      ? "No traffic or accounts yet. Public-site views (with analytics on) and /signup appear in this console."
+      : `${fmt(metrics.sessions)} sessions in 30 days · ${pct(metrics.funnel.conversionRate)} visitor-to-lead · bounce ${pct(metrics.bounceRate)}.`;
 
   return (
     <main className="admin-shell admin-ops">
-      <header className="admin-top">
+      <header className="admin-top dash-in">
         <div>
           <p className="eyebrow">Founder</p>
-          <h1>Ops console</h1>
-          <p className="lead">Live funnel, product usage, and trial controls in one place.</p>
+          <h1>Admin dashboard</h1>
+          <p className="lead">{snapshotLine}</p>
         </div>
         <div className="admin-top-actions">
           <button
@@ -337,10 +400,14 @@ export function AdminDashboard() {
                 setAccounts(null);
                 setBilling(null);
               }
+              if (tab === "billing") {
+                setAccounts(null);
+                setBillingTick((n) => n + 1);
+              }
               if (tab === "experiments") setExperiments(null);
             }}
           >
-            Refresh tab
+            Refresh
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => void onLogout()}>
             Sign out
@@ -352,14 +419,15 @@ export function AdminDashboard() {
         {(
           [
             ["overview", "Overview"],
-            ["leads", "Leads"],
-            ["assessments", "Assessments"],
-            ["community", "Community"],
-            ["trials", "Trials"],
+            ["leads", overview ? `Leads (${overview.metrics.funnel.leadsSubmitted})` : "Leads"],
+            ["assessments", overview ? `Assessments (${overview.workspace.runs})` : "Assessments"],
+            ["community", overview ? `Community (${overview.workspace.threads})` : "Community"],
+            ["billing", overview ? `Billing (${formatInrFromPaise(overview.commerce?.revenueThisMonth || 0)})` : "Billing"],
+            ["trials", overview ? `People (${overview.accounts.total})` : "People"],
             ["experiments", "Experiments"],
           ] as const
         ).map(([id, label]) => (
-          <button key={id} type="button" className={tab === id ? "is-active" : undefined} onClick={() => setTab(id)}>
+          <button key={id} type="button" className={tab === id ? "is-active" : undefined} onClick={() => setTab(id as Tab)}>
             {label}
           </button>
         ))}
@@ -368,10 +436,13 @@ export function AdminDashboard() {
       {error ? <p className="admin-error">{error}</p> : null}
 
       {tab === "overview" ? (
-        <section className="admin-panel">
+        <section className="admin-panel" data-testid="admin-overview">
           {overviewLoading && !overview ? (
             <div className="admin-skeleton-page" aria-busy="true">
+              <div className="admin-skeleton admin-skeleton-hero" />
               <div className="admin-stat-grid">
+                <div className="admin-skeleton admin-skeleton-stat" />
+                <div className="admin-skeleton admin-skeleton-stat" />
                 <div className="admin-skeleton admin-skeleton-stat" />
                 <div className="admin-skeleton admin-skeleton-stat" />
                 <div className="admin-skeleton admin-skeleton-stat" />
@@ -385,36 +456,220 @@ export function AdminDashboard() {
           ) : null}
           {overview && metrics ? (
             <>
-              <div className="admin-stat-grid">
-                <Stat label="Page views" value={fmt(metrics.pageViews)} hint="30 days" />
-                <Stat label="Visitors" value={fmt(metrics.uniqueVisitors)} hint="30 days" />
-                <Stat label="Conversion" value={pct(metrics.funnel.conversionRate)} hint="leads / visitors" />
-                <Stat label="Trials" value={fmt(overview.accounts.trial)} hint={`${overview.accounts.paid} paid`} />
-                <Stat label="Runs" value={fmt(overview.workspace.runs)} hint="assessments" />
-                <Stat label="Threads" value={fmt(overview.workspace.threads)} hint={`${overview.workspace.replies} replies`} />
+              <section className="admin-brief dash-in">
+                <div>
+                  <p className="eyebrow">Live snapshot</p>
+                  <h2>{briefTitle}</h2>
+                  <p>{briefCopy}</p>
+                </div>
+                <dl className="admin-brief-kpis">
+                  <div>
+                    <dt>Trial</dt>
+                    <dd className="num">{fmt(overview.accounts.trial)}</dd>
+                  </div>
+                  <div>
+                    <dt>Paid</dt>
+                    <dd className="num">{fmt(overview.accounts.paid)}</dd>
+                  </div>
+                  <div>
+                    <dt>Expired</dt>
+                    <dd className="num">{fmt(overview.accounts.expired)}</dd>
+                  </div>
+                  <div>
+                    <dt>No access</dt>
+                    <dd className="num">{fmt(overview.accounts.none)}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              {commerce ? (
+                <div className="admin-commerce dash-in delay-1">
+                  <article>
+                    <p className="meta">Revenue today</p>
+                    <p className="admin-big">{formatInrFromPaise(commerce.revenueToday)}</p>
+                    <p className="meta">IST calendar day</p>
+                  </article>
+                  <article>
+                    <p className="meta">This month</p>
+                    <p className="admin-big">{formatInrFromPaise(commerce.revenueThisMonth)}</p>
+                    <p className="meta">{momLabel(commerce.momRevenuePct)}</p>
+                  </article>
+                  <article>
+                    <p className="meta">Last month</p>
+                    <p className="admin-big">{formatInrFromPaise(commerce.revenueLastMonth)}</p>
+                    <p className="meta">{fmt(commerce.paidThisMonth)} paid bills this month</p>
+                  </article>
+                  <article>
+                    <p className="meta">People this month</p>
+                    <p className="admin-big">{fmt(commerce.peopleThisMonth)}</p>
+                    <p className="meta">
+                      {fmt(commerce.peopleLastMonth)} last month · {fmt(commerce.visitorsThisMonth)} visitors
+                    </p>
+                  </article>
+                  <article>
+                    <p className="meta">Outstanding</p>
+                    <p className="admin-big">{formatInrFromPaise(commerce.outstandingPaise)}</p>
+                    <p className="meta">{fmt(commerce.leadsThisMonth)} leads this month</p>
+                  </article>
+                </div>
+              ) : null}
+
+              {overview.accounts.expired > 0 || overview.accounts.none > 0 || metrics.uniqueVisitors === 0 ? (
+                <div className="admin-attention dash-in delay-1">
+                  {overview.accounts.expired > 0 ? (
+                    <button type="button" className="admin-flag" onClick={() => setTab("trials")}>
+                      <strong>{fmt(overview.accounts.expired)} expired</strong>
+                      <span>Restore trial or paid access on People.</span>
+                    </button>
+                  ) : null}
+                  {overview.accounts.none > 0 ? (
+                    <button type="button" className="admin-flag" onClick={() => setTab("trials")}>
+                      <strong>{fmt(overview.accounts.none)} without access</strong>
+                      <span>These accounts cannot enter the app yet.</span>
+                    </button>
+                  ) : null}
+                  {metrics.uniqueVisitors === 0 ? (
+                    <div className="admin-flag" role="status">
+                      <strong>No site visitors in 30 days</strong>
+                      <span>Page views on lokutara.in with analytics accepted will fill the funnel.</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="admin-stat-grid dash-in delay-1">
+                <Stat label="Visitors" value={fmt(metrics.uniqueVisitors)} hint={`${fmt(metrics.dau)} today · ${fmt(metrics.mau)} / 30d`} />
+                <Stat label="Page views" value={fmt(metrics.pageViews)} hint={`${(metrics.pagesPerSession ?? 0).toFixed(1)} per session`} />
+                <Stat label="Leads" value={fmt(metrics.funnel.leadsSubmitted)} hint={`${pct(metrics.funnel.conversionRate)} conversion`} />
+                <Stat label="People" value={fmt(overview.accounts.total)} hint={`${overview.accounts.trial} trial · ${overview.accounts.paid} paid`} />
+                <Stat label="Screens" value={fmt(overview.workspace.runs)} hint="assessment completions" />
+                <Stat label="Community" value={fmt(overview.workspace.threads)} hint={`${fmt(overview.workspace.replies)} replies`} />
               </div>
-              <div className="chart-grid">
-                <TrendChart points={overview.series} valueKey="views" label="Pageviews · 14d" />
-                <TrendChart points={overview.series} valueKey="leads" label="Leads · 14d" />
+
+              <div className="admin-split dash-in delay-2">
+                <div className="admin-card">
+                  <h2 className="admin-h2">Site funnel</h2>
+                  <FunnelBars
+                    steps={[
+                      { label: "Page views", value: metrics.funnel.pageViews },
+                      { label: "CTA clicks", value: metrics.funnel.ctaClicks },
+                      { label: "Form starts", value: metrics.funnel.formStarts },
+                      { label: "Leads", value: metrics.funnel.leadsSubmitted },
+                    ]}
+                  />
+                  <p className="meta admin-hint">Bounce {pct(metrics.bounceRate)} · {fmt(metrics.sessions)} sessions in 30 days</p>
+                </div>
+                <div className="admin-card">
+                  <h2 className="admin-h2">Traffic sources</h2>
+                  {metrics.sources.length ? (
+                    <ul className="admin-source-list">
+                      {metrics.sources.map((source) => {
+                        const max = Math.max(1, metrics.sources[0]?.visitors ?? 1);
+                        return (
+                          <li key={source.channel}>
+                            <div className="funnel-bars-meta">
+                              <span>{source.channel}</span>
+                              <span className="num">{fmt(source.visitors)}</span>
+                            </div>
+                            <div className="funnel-track" aria-hidden="true">
+                              <span style={{ width: `${Math.max(8, (source.visitors / max) * 100)}%` }} />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="admin-empty">No source data yet. Views on the public site with analytics accepted will show here.</p>
+                  )}
+                </div>
               </div>
-              <h2 className="admin-h2">Funnel</h2>
-              <FunnelBars
-                steps={[
-                  { label: "Page views", value: metrics.funnel.pageViews },
-                  { label: "CTA clicks", value: metrics.funnel.ctaClicks },
-                  { label: "Form starts", value: metrics.funnel.formStarts },
-                  { label: "Leads", value: metrics.funnel.leadsSubmitted },
-                ]}
-              />
+
+              <div className="chart-grid dash-in delay-2">
+                <TrendChart points={overview.series} valueKey="views" label="Pageviews · 14 days" />
+                <TrendChart points={overview.series} valueKey="leads" label="Leads · 14 days" />
+                <TrendChart points={overview.series} valueKey="revenue" label="Revenue · 14 days" />
+                <TrendChart points={overview.series} valueKey="signups" label="Signups · 14 days" />
+              </div>
+
+              <div className="admin-activity dash-in delay-3">
+                <ActivityList
+                  title="Latest people"
+                  empty="No signups yet. New accounts from /signup appear here."
+                  onViewAll={() => setTab("trials")}
+                  items={recentPeople.map((person) => ({
+                    key: person.id,
+                    title: person.name,
+                    meta: [person.email, person.city, person.phone, person.access.status, when(person.createdAt)]
+                      .filter(Boolean)
+                      .join(" · "),
+                    pill: person.access.status,
+                  }))}
+                />
+                <ActivityList
+                  title="Latest leads"
+                  empty="No enquiry forms yet."
+                  onViewAll={() => setTab("leads")}
+                  items={recentLeads.map((lead) => ({
+                    key: lead.id,
+                    title: lead.name,
+                    meta: [lead.type, lead.organisation, lead.email, when(lead.createdAt)].filter(Boolean).join(" · "),
+                    pill: lead.type,
+                  }))}
+                />
+                <ActivityList
+                  title="Latest screens"
+                  empty="No assessment completions yet."
+                  onViewAll={() => setTab("assessments")}
+                  items={recentRuns.map((run) => ({
+                    key: run.id,
+                    title: assessmentTitle(run.assessmentId),
+                    meta: `${run.accountName} · ${when(run.createdAt)}`,
+                    bar: run.score,
+                  }))}
+                />
+                <ActivityList
+                  title="Latest threads"
+                  empty="No community threads yet."
+                  onViewAll={() => setTab("community")}
+                  items={recentThreads.map((thread) => ({
+                    key: thread.id,
+                    title: thread.title,
+                    meta: [
+                      thread.authorName,
+                      `${thread.answerCount} ${thread.answerCount === 1 ? "reply" : "replies"}`,
+                      `${thread.views} views`,
+                      thread.createdAt ? when(thread.createdAt) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · "),
+                  }))}
+                />
+                <ActivityList
+                  title="Latest bills"
+                  empty="No invoices yet. Issue a workshop bill from Billing."
+                  onViewAll={() => setTab("billing")}
+                  items={recentInvoices.map((invoice) => ({
+                    key: invoice.id,
+                    title: `${invoice.number} · ${invoice.customerName}`,
+                    meta: [invoice.label, invoice.totalLabel, invoice.status, when(invoice.createdAt)]
+                      .filter(Boolean)
+                      .join(" · "),
+                    pill: invoice.status,
+                  }))}
+                />
+              </div>
             </>
           ) : !overviewLoading ? (
-            <p className="admin-empty">No overview yet. Browse the public site with analytics on to seed charts.</p>
+            <p className="admin-empty">Could not load the dashboard. Use Refresh.</p>
           ) : null}
         </section>
       ) : null}
 
       {tab === "leads" ? (
         <section className="admin-panel">
+          <div className="admin-card-head">
+            <h2 className="admin-h2">Leads {leads ? `(${leads.length})` : ""}</h2>
+          </div>
           {!leads ? (
             <div className="admin-skeleton" />
           ) : !leads.length ? (
@@ -455,10 +710,13 @@ export function AdminDashboard() {
 
       {tab === "assessments" ? (
         <section className="admin-panel">
+          <div className="admin-card-head">
+            <h2 className="admin-h2">Assessments {workspace ? `(${workspace.runs.length})` : ""}</h2>
+          </div>
           {!workspace ? (
             <div className="admin-skeleton" />
           ) : !workspace.runs.length ? (
-            <p className="admin-empty">No assessment completions yet. Completions from the customer dashboard land here.</p>
+            <p className="admin-empty">No assessment completions yet. When someone finishes a screen in the app, it lands here.</p>
           ) : (
             <div className="admin-table-wrap">
               <table className="admin-table">
@@ -475,7 +733,7 @@ export function AdminDashboard() {
                     <tr key={run.id}>
                       <td className="meta">{when(run.createdAt)}</td>
                       <td>{run.accountName}</td>
-                      <td>{run.assessmentId}</td>
+                      <td>{assessmentTitle(run.assessmentId)}</td>
                       <td className="num">{run.score}</td>
                     </tr>
                   ))}
@@ -488,10 +746,13 @@ export function AdminDashboard() {
 
       {tab === "community" ? (
         <section className="admin-panel">
+          <div className="admin-card-head">
+            <h2 className="admin-h2">Community {workspace ? `(${workspace.threads.length})` : ""}</h2>
+          </div>
           {!workspace ? (
             <div className="admin-skeleton" />
           ) : !workspace.threads.length ? (
-            <p className="admin-empty">No community threads yet. This is the same product — there is no second forum admin.</p>
+            <p className="admin-empty">No community threads yet. Questions asked in the app appear here.</p>
           ) : (
             <div className="admin-table-wrap">
               <table className="admin-table">
@@ -525,6 +786,10 @@ export function AdminDashboard() {
             <div className="admin-skeleton" />
           ) : (
             <>
+              <div className="admin-card-head">
+                <h2 className="admin-h2">People ({accounts.length})</h2>
+              </div>
+              <p className="lead admin-hint">Grant trial or paid access, or revoke the app.</p>
               <div className="trial-controls">
                 <label className="admin-toggle">
                   <input
@@ -589,6 +854,16 @@ export function AdminDashboard() {
                           {row.name}
                           <br />
                           <span className="meta">{row.email}</span>
+                          {row.phone || row.city ? (
+                            <>
+                              <br />
+                              <span className="meta">
+                                {[row.phone, row.city, row.age != null ? `${row.age}` : null]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </span>
+                            </>
+                          ) : null}
                         </td>
                         <td>
                           <span className="admin-pill">{row.access.status}</span>
@@ -600,6 +875,7 @@ export function AdminDashboard() {
                         </td>
                         <td>
                           <select
+                            className="input"
                             aria-label={`Community role for ${row.name}`}
                             value={row.communityRole ?? "student"}
                             onChange={(e) =>
@@ -631,10 +907,26 @@ export function AdminDashboard() {
                   </tbody>
                 </table>
               </div>
-              {!accounts.length ? <p className="admin-empty">No customer accounts yet. Signups from /signup appear here.</p> : null}
+              {!accounts.length ? <p className="admin-empty">No customer accounts yet. Signups from the trial form appear here.</p> : null}
             </>
           )}
         </section>
+      ) : null}
+
+      {tab === "billing" ? (
+        <BillingModule
+          key={billingTick}
+          accounts={accounts}
+          ensureAccounts={() => {
+            if (accounts === null) {
+              void (async () => {
+                const a = await adminFetch("/api/admin/accounts");
+                if (a.res.ok) setAccounts(a.body.accounts || []);
+              })();
+            }
+          }}
+          onChanged={() => void loadOverview()}
+        />
       ) : null}
 
       {tab === "experiments" ? (
@@ -734,5 +1026,55 @@ function Stat({ label, value, hint }: { label: string; value: string; hint: stri
       <p className="num admin-big">{value}</p>
       <p className="meta">{hint}</p>
     </div>
+  );
+}
+
+function ActivityList({
+  title,
+  empty,
+  items,
+  onViewAll,
+}: {
+  title: string;
+  empty: string;
+  onViewAll?: () => void;
+  items: Array<{ key: string; title: string; meta: string; pill?: string; bar?: number }>;
+}) {
+  return (
+    <section className="admin-card">
+      <div className="admin-card-head">
+        <h2 className="admin-h2">{title}</h2>
+        {onViewAll ? (
+          <button type="button" className="admin-text-btn" onClick={onViewAll}>
+            View all
+          </button>
+        ) : null}
+      </div>
+      {items.length ? (
+        <ul className="admin-activity-list">
+          {items.map((item) => (
+            <li key={item.key}>
+              <div className="admin-activity-row">
+                <div>
+                  <strong>{item.title}</strong>
+                  <p className="meta">{item.meta}</p>
+                </div>
+                {item.pill ? <span className="admin-pill">{item.pill}</span> : null}
+                {item.bar != null ? (
+                  <div className="admin-score">
+                    <span className="funnel-track" aria-hidden="true">
+                      <span style={{ width: `${Math.max(8, Math.min(100, item.bar))}%` }} />
+                    </span>
+                    <span className="num">{item.bar}</span>
+                  </div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="admin-empty">{empty}</p>
+      )}
+    </section>
   );
 }

@@ -19,6 +19,40 @@ function mintToken(): string {
   return randomBytes(32).toString("hex");
 }
 
+function asTrimmed(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function parsePhone(value: unknown): string {
+  const phone = asTrimmed(value);
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) {
+    throw new HttpError(400, "invalid", "Enter a valid phone number");
+  }
+  return phone;
+}
+
+function parseAge(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(asTrimmed(value));
+  if (!Number.isInteger(n) || n < 13 || n > 120) {
+    throw new HttpError(400, "invalid", "Enter a valid age");
+  }
+  return n;
+}
+
+function parseCity(value: unknown): string {
+  const city = asTrimmed(value);
+  if (city.length < 2 || city.length > 80) throw new HttpError(400, "invalid", "Enter your city");
+  return city;
+}
+
+function parseOrganisation(value: unknown): string | null {
+  const organisation = asTrimmed(value);
+  if (!organisation) return null;
+  if (organisation.length > 120) throw new HttpError(400, "invalid", "Organisation is too long");
+  return organisation;
+}
+
 export function createAuthRouter(deps: {
   accounts: AccountStore;
   sessions: AppSessionStore;
@@ -48,13 +82,40 @@ export function createAuthRouter(deps: {
     }),
   );
 
+  router.patch(
+    "/me",
+    asyncHandler(async (req, res) => {
+      const token = readAppToken(req);
+      if (!token) throw new HttpError(401, "unauthorized", "Sign in to update your profile");
+      const session = await deps.sessions.get(token);
+      if (!session) throw new HttpError(401, "unauthorized", "Sign in to update your profile");
+      const account = await deps.accounts.getById(session.accountId);
+      if (!account) throw new HttpError(401, "unauthorized", "Sign in to update your profile");
+
+      const body = req.body || {};
+      const name = asTrimmed(body.name);
+      if (name.length < 2 || name.length > 80) throw new HttpError(400, "invalid", "Enter your name");
+      account.name = name;
+      account.phone = parsePhone(body.phone);
+      account.age = parseAge(body.age);
+      account.city = parseCity(body.city);
+      account.organisation = parseOrganisation(body.organisation);
+      await deps.accounts.update(account);
+      res.json({ ok: true, account: presentAccount(account) });
+    }),
+  );
+
   router.post(
     "/signup",
     asyncHandler(async (req, res) => {
       const body = req.body || {};
-      const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const email = asTrimmed(body.email).toLowerCase();
+      const name = asTrimmed(body.name);
       const password = typeof body.password === "string" ? body.password : "";
+      const phone = parsePhone(body.phone);
+      const age = parseAge(body.age);
+      const city = parseCity(body.city);
+      const organisation = parseOrganisation(body.organisation);
       if (!isEmail(email)) throw new HttpError(400, "invalid", "Enter a valid email");
       if (name.length < 2 || name.length > 80) throw new HttpError(400, "invalid", "Enter your name");
       if (password.length < 8) throw new HttpError(400, "invalid", "Password must be at least 8 characters");
@@ -68,6 +129,10 @@ export function createAuthRouter(deps: {
         id: `acc_${randomBytes(8).toString("hex")}`,
         email,
         name,
+        phone,
+        age,
+        city,
+        organisation,
         passwordHash: await hashPassword(password),
         plan: settings.autoTrialOnSignup ? "trial" : "none",
         trialEndsAt: settings.autoTrialOnSignup ? addDays(now, settings.defaultTrialDays) : null,

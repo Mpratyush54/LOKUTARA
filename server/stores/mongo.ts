@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import type { StoredAnalyticsEvent } from "../../lib/tracking/events";
 import type { AccountRecord, BillingSettings, ModuleFlags, Plan } from "../../lib/access/billing";
 import { DEFAULT_BILLING_SETTINGS } from "../../lib/access/billing";
+import type { Invoice } from "../../lib/billing/invoices";
 import type { LocalThread } from "../../lib/product/workspace";
 import type {
   AccountStore,
@@ -12,6 +13,7 @@ import type {
   BillingSettingsStore,
   EventStore,
   ExperimentConfigStore,
+  InvoiceStore,
   LeadStore,
   SessionStore,
   StoredExperimentConfig,
@@ -111,6 +113,10 @@ const AccountSchema = new mongoose.Schema(
     id: { type: String, unique: true, index: true },
     email: { type: String, unique: true, index: true },
     name: String,
+    phone: String,
+    age: Number,
+    city: String,
+    organisation: String,
     passwordHash: String,
     plan: { type: String, index: true },
     trialEndsAt: Date,
@@ -143,8 +149,44 @@ const BillingSettingsSchema = new mongoose.Schema(
       assessments: { type: Boolean, default: true },
       community: { type: Boolean, default: true },
     },
+    legalName: { type: String, default: "Lokutara" },
+    gstin: { type: String, default: "" },
+    address: { type: String, default: "" },
+    gstRate: { type: Number, default: 18 },
   },
   { collection: "billing_settings" },
+);
+
+const InvoiceSchema = new mongoose.Schema(
+  {
+    id: { type: String, unique: true, index: true },
+    number: { type: String, unique: true, index: true },
+    accountId: { type: String, index: true, sparse: true },
+    customerName: String,
+    customerEmail: { type: String, index: true },
+    customerPhone: String,
+    organisation: String,
+    sku: String,
+    label: String,
+    qty: { type: Number, default: 1 },
+    unitAmountPaise: Number,
+    gstRate: { type: Number, default: 18 },
+    subtotalPaise: Number,
+    gstPaise: Number,
+    totalPaise: Number,
+    currency: { type: String, default: "INR" },
+    status: { type: String, index: true },
+    issuedAt: Date,
+    dueAt: Date,
+    paidAt: { type: Date, index: true },
+    grantAccessOnPay: { type: Boolean, default: false },
+    razorpayPaymentLinkId: { type: String, index: true, sparse: true },
+    paymentUrl: String,
+    razorpayPaymentId: String,
+    notes: String,
+    createdAt: { type: Date, default: Date.now, index: true },
+  },
+  { collection: "invoices" },
 );
 
 const ThreadSchema = new mongoose.Schema(
@@ -198,6 +240,7 @@ export const BillingSettingsModel =
 export const ThreadModel = mongoose.models.AppThread || mongoose.model("AppThread", ThreadSchema);
 export const AssessmentRunModel =
   mongoose.models.AppAssessmentRun || mongoose.model("AppAssessmentRun", AssessmentRunSchema);
+export const InvoiceModel = mongoose.models.Invoice || mongoose.model("Invoice", InvoiceSchema);
 
 export async function connectMongo(uri: string): Promise<void> {
   if (mongoose.connection.readyState === 1) return;
@@ -217,6 +260,7 @@ export async function ensureMongoIndexes(): Promise<void> {
     BillingSettingsModel.syncIndexes(),
     ThreadModel.syncIndexes(),
     AssessmentRunModel.syncIndexes(),
+    InvoiceModel.syncIndexes(),
   ]);
 }
 
@@ -382,6 +426,10 @@ function mapAccount(row: Record<string, unknown>): AccountRecord {
     id: row.id as string,
     email: row.email as string,
     name: (row.name as string) || "",
+    phone: (row.phone as string | null) ?? null,
+    age: typeof row.age === "number" && Number.isFinite(row.age) ? row.age : null,
+    city: (row.city as string | null) ?? null,
+    organisation: (row.organisation as string | null) ?? null,
     passwordHash: (row.passwordHash as string) || "",
     plan: (row.plan as Plan) || "none",
     trialEndsAt: row.trialEndsAt ? new Date(row.trialEndsAt as Date) : null,
@@ -448,6 +496,10 @@ export const mongoBillingSettingsStore: BillingSettingsStore = {
         assessments: Boolean((row.trialModules as ModuleFlags | undefined)?.assessments ?? true),
         community: Boolean((row.trialModules as ModuleFlags | undefined)?.community ?? true),
       },
+      legalName: typeof row.legalName === "string" && row.legalName.trim() ? row.legalName : DEFAULT_BILLING_SETTINGS.legalName,
+      gstin: typeof row.gstin === "string" ? row.gstin : "",
+      address: typeof row.address === "string" ? row.address : "",
+      gstRate: Number.isFinite(Number(row.gstRate)) ? Number(row.gstRate) : DEFAULT_BILLING_SETTINGS.gstRate,
     };
   },
   async save(settings: BillingSettings) {
@@ -549,5 +601,59 @@ export const mongoAssessmentRunStore: AssessmentRunStore = {
   async list() {
     const rows = await AssessmentRunModel.find().sort({ createdAt: -1 }).lean();
     return rows.map((row) => mapRun(row as Record<string, unknown>));
+  },
+};
+
+function mapInvoice(row: Record<string, unknown>): Invoice {
+  return {
+    id: row.id as string,
+    number: row.number as string,
+    accountId: (row.accountId as string) || null,
+    customerName: (row.customerName as string) || "",
+    customerEmail: (row.customerEmail as string) || "",
+    customerPhone: (row.customerPhone as string) || null,
+    organisation: (row.organisation as string) || null,
+    sku: row.sku as Invoice["sku"],
+    label: (row.label as string) || "",
+    qty: Number(row.qty || 1),
+    unitAmountPaise: Number(row.unitAmountPaise || 0),
+    gstRate: Number(row.gstRate || 18),
+    subtotalPaise: Number(row.subtotalPaise || 0),
+    gstPaise: Number(row.gstPaise || 0),
+    totalPaise: Number(row.totalPaise || 0),
+    currency: "INR",
+    status: (row.status as Invoice["status"]) || "draft",
+    issuedAt: row.issuedAt ? new Date(row.issuedAt as Date) : null,
+    dueAt: row.dueAt ? new Date(row.dueAt as Date) : null,
+    paidAt: row.paidAt ? new Date(row.paidAt as Date) : null,
+    grantAccessOnPay: Boolean(row.grantAccessOnPay),
+    razorpayPaymentLinkId: (row.razorpayPaymentLinkId as string) || null,
+    paymentUrl: (row.paymentUrl as string) || null,
+    razorpayPaymentId: (row.razorpayPaymentId as string) || null,
+    notes: (row.notes as string) || null,
+    createdAt: new Date((row.createdAt as Date) || Date.now()),
+  };
+}
+
+export const mongoInvoiceStore: InvoiceStore = {
+  async list() {
+    const rows = await InvoiceModel.find().sort({ createdAt: -1 }).lean();
+    return rows.map((row) => mapInvoice(row as Record<string, unknown>));
+  },
+  async get(id) {
+    const row = await InvoiceModel.findOne({ id }).lean();
+    return row ? mapInvoice(row as Record<string, unknown>) : null;
+  },
+  async getByPaymentLinkId(linkId) {
+    const row = await InvoiceModel.findOne({ razorpayPaymentLinkId: linkId }).lean();
+    return row ? mapInvoice(row as Record<string, unknown>) : null;
+  },
+  async insert(invoice) {
+    await InvoiceModel.create(invoice);
+    return invoice;
+  },
+  async update(invoice) {
+    await InvoiceModel.findOneAndUpdate({ id: invoice.id }, invoice, { upsert: true, new: true });
+    return invoice;
   },
 };

@@ -27,7 +27,7 @@ describe("loadEnv", () => {
     expect(env.adminDashboardSecret).toBeNull();
     expect(env.adminEmail).toBeNull();
     expect(env.trustProxy).toBe(true);
-    expect(env.warnings.length).toBe(3);
+    expect(env.warnings.length).toBe(4);
   });
 
   it("falls back password to ADMIN_DASHBOARD_SECRET and warns when email unset", () => {

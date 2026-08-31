@@ -6,6 +6,7 @@ import {
   type AccountRecord,
   type BillingSettings,
 } from "../../lib/access/billing";
+import type { Invoice } from "../../lib/billing/invoices";
 import type { LocalAnswer, LocalThread } from "../../lib/product/workspace";
 
 export type StoredLead = ValidLead & {
@@ -114,6 +115,14 @@ export type ThreadStore = {
   toggleUpvote(threadId: string, answerId: string, accountId: string): Promise<LocalThread | null>;
 };
 
+export type InvoiceStore = {
+  list(): Promise<Invoice[]>;
+  get(id: string): Promise<Invoice | null>;
+  getByPaymentLinkId(linkId: string): Promise<Invoice | null>;
+  insert(invoice: Invoice): Promise<Invoice>;
+  update(invoice: Invoice): Promise<Invoice>;
+};
+
 export type AssessmentRunStore = {
   insert(run: AssessmentRun): Promise<AssessmentRun>;
   listByAccount(accountId: string): Promise<AssessmentRun[]>;
@@ -134,6 +143,7 @@ export function createMemoryStores() {
   const appSessions = new Map<string, AppSession>();
   const threads: LocalThread[] = [];
   const assessmentRuns: AssessmentRun[] = [];
+  const invoices: Invoice[] = [];
   let billingSettings: BillingSettings = { ...DEFAULT_BILLING_SETTINGS, trialModules: { ...DEFAULT_BILLING_SETTINGS.trialModules } };
 
   const eventStore: EventStore = {
@@ -316,6 +326,28 @@ export function createMemoryStores() {
     },
   };
 
+  const invoiceStore: InvoiceStore = {
+    async list() {
+      return [...invoices].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+    async get(id) {
+      return invoices.find((invoice) => invoice.id === id) ?? null;
+    },
+    async getByPaymentLinkId(linkId) {
+      return invoices.find((invoice) => invoice.razorpayPaymentLinkId === linkId) ?? null;
+    },
+    async insert(invoice) {
+      invoices.push(invoice);
+      return invoice;
+    },
+    async update(invoice) {
+      const i = invoices.findIndex((row) => row.id === invoice.id);
+      if (i >= 0) invoices[i] = invoice;
+      else invoices.push(invoice);
+      return invoice;
+    },
+  };
+
   return {
     events,
     leads,
@@ -333,5 +365,7 @@ export function createMemoryStores() {
     billingSettingsStore,
     threadStore,
     assessmentRunStore,
+    invoiceStore,
+    invoices,
   };
 }

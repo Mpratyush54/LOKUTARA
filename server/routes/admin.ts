@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { computeMetrics } from "../../lib/tracking/metrics";
 import {
@@ -24,6 +25,7 @@ import type {
   BillingSettingsStore,
   EventStore,
   ExperimentConfigStore,
+  InvoiceStore,
   LeadStore,
   StoredExperimentConfig,
   StoredLead,
@@ -31,7 +33,18 @@ import type {
 } from "../stores/memory";
 import { loadProductSnapshot } from "../../lib/product/snapshot";
 import { createProductUpstream, type ProductUpstream } from "../../lib/product/upstream";
-import { dailySeries } from "../../lib/charts/series";
+import { INVOICE_SKUS, isInvoiceSku } from "../../lib/billing/catalog";
+import { computeCommerce } from "../../lib/billing/commerce";
+import {
+  DEFAULT_GST_RATE,
+  lineFromSku,
+  nextInvoiceNumber,
+  presentInvoice,
+  rupeesToPaise,
+  type Invoice,
+} from "../../lib/billing/invoices";
+import { markInvoicePaid } from "../billing/settle";
+import type { RazorpayClient } from "../payments/razorpay";
 import {
   ALL_MODULES_OFF,
   DEFAULT_BILLING_SETTINGS,
@@ -121,6 +134,8 @@ export function createAdminRouter(deps: {
   billing?: BillingSettingsStore;
   threads?: ThreadStore;
   assessmentRuns?: AssessmentRunStore;
+  invoices?: InvoiceStore;
+  razorpay?: RazorpayClient;
 }): Router {
   const router = Router();
   const envCreds = readAdminCredentials();
@@ -139,6 +154,7 @@ export function createAdminRouter(deps: {
       authenticated: isAdminAuthorized(req, password),
       configured: true,
       emailRequired: Boolean(email),
+      razorpayConfigured: Boolean(deps.razorpay?.configured),
     });
   });
 
@@ -320,18 +336,53 @@ export function createAdminRouter(deps: {
       const accounts = deps.accounts ? await deps.accounts.list() : [];
       const runs = deps.assessmentRuns ? await deps.assessmentRuns.list() : [];
       const threads = deps.threads ? await deps.threads.list() : [];
+      const invoices = deps.invoices ? await deps.invoices.list() : [];
+      const leadRows = await deps.leads.list(500);
       const counts = { none: 0, trial: 0, paid: 0, expired: 0 };
       for (const account of accounts) {
         counts[resolveAccess(account).status] += 1;
       }
+      const names = new Map(accounts.map((account) => [account.id, account.name || account.email]));
+      const commerce = computeCommerce({
+        invoices,
+        accounts,
+        events,
+        leads: leadRows,
+      });
       res.json({
         metrics: computeMetrics(events),
-        series: dailySeries(events, 14),
+        series: commerce.series,
+        commerce,
+        razorpayConfigured: Boolean(deps.razorpay?.configured),
         accounts: { ...counts, total: accounts.length },
         workspace: {
           runs: runs.length,
           threads: threads.length,
           replies: threads.reduce((sum, thread) => sum + thread.answers.length, 0),
+        },
+        recent: {
+          leads: leadRows.slice(0, 6).map(presentLeadForAdmin),
+          people: accounts.slice(0, 6).map((account) => presentAccount(account)),
+          runs: runs
+            .slice()
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            .slice(0, 6)
+            .map((run) => ({
+              id: run.id,
+              accountName: names.get(run.accountId) || run.accountId,
+              assessmentId: run.assessmentId,
+              score: run.score,
+              createdAt: run.createdAt.toISOString(),
+            })),
+          threads: threads.slice(0, 6).map((thread) => ({
+            id: thread.id,
+            title: thread.title,
+            authorName: thread.authorName,
+            answerCount: thread.answers.length,
+            views: thread.views,
+            createdAt: thread.createdAt.toISOString(),
+          })),
+          invoices: invoices.slice(0, 6).map((invoice) => presentInvoice(invoice)),
         },
       });
     }),
@@ -400,11 +451,21 @@ export function createAdminRouter(deps: {
       if (!Number.isFinite(days) || days < 1 || days > 90) {
         throw new HttpError(400, "invalid", "Trial length must be 1–90 days");
       }
+      const gstRate =
+        body.gstRate !== undefined ? Number(body.gstRate) : existing.gstRate ?? DEFAULT_GST_RATE;
+      if (!Number.isFinite(gstRate) || gstRate < 0 || gstRate > 40) {
+        throw new HttpError(400, "invalid", "GST rate must be 0–40");
+      }
       const settings: BillingSettings = {
+        ...existing,
         autoTrialOnSignup:
           typeof body.autoTrialOnSignup === "boolean" ? body.autoTrialOnSignup : existing.autoTrialOnSignup,
         defaultTrialDays: days,
         trialModules,
+        legalName: typeof body.legalName === "string" ? body.legalName.trim() : existing.legalName,
+        gstin: typeof body.gstin === "string" ? body.gstin.trim() : existing.gstin,
+        address: typeof body.address === "string" ? body.address.trim() : existing.address,
+        gstRate,
       };
       await deps.billing.save(settings);
       res.json({ settings });
@@ -483,5 +544,200 @@ export function createAdminRouter(deps: {
     }),
   );
 
+  router.get(
+    "/invoices",
+    gate,
+    asyncHandler(async (_req, res) => {
+      const rows = deps.invoices ? await deps.invoices.list() : [];
+      const settings = deps.billing ? await deps.billing.get() : DEFAULT_BILLING_SETTINGS;
+      res.json({
+        invoices: rows.map((invoice) => presentInvoice(invoice)),
+        catalog: INVOICE_SKUS,
+        razorpayConfigured: Boolean(deps.razorpay?.configured),
+        settings: {
+          legalName: settings.legalName,
+          gstin: settings.gstin,
+          address: settings.address,
+          gstRate: settings.gstRate,
+        },
+      });
+    }),
+  );
+
+  router.post(
+    "/invoices",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.invoices) throw new HttpError(503, "unavailable", "Invoice store is not configured");
+      const settings = deps.billing ? await deps.billing.get() : DEFAULT_BILLING_SETTINGS;
+      const invoice = await buildInvoiceFromBody(req.body || {}, {
+        invoices: deps.invoices,
+        accounts: deps.accounts,
+        gstRate: settings.gstRate ?? DEFAULT_GST_RATE,
+      });
+      await deps.invoices.insert(invoice);
+      let stored = invoice;
+      if (req.body?.issue) {
+        stored = await issueInvoice(stored, deps);
+      }
+      res.status(201).json({ invoice: presentInvoice(stored) });
+    }),
+  );
+
+  router.post(
+    "/invoices/:id/issue",
+    gate,
+    asyncHandler(async (req, res) => {
+      const invoice = await requireInvoice(deps, req.params.id);
+      const issued = await issueInvoice(invoice, deps);
+      res.json({ invoice: presentInvoice(issued) });
+    }),
+  );
+
+  router.post(
+    "/invoices/:id/record-payment",
+    gate,
+    asyncHandler(async (req, res) => {
+      const invoice = await requireInvoice(deps, req.params.id);
+      const paid = await markInvoicePaid(invoice, {
+        invoices: deps.invoices!,
+        accounts: deps.accounts,
+        paymentId: typeof req.body?.paymentId === "string" ? req.body.paymentId : "offline",
+      });
+      res.json({ invoice: presentInvoice(paid) });
+    }),
+  );
+
+  router.post(
+    "/invoices/:id/cancel",
+    gate,
+    asyncHandler(async (req, res) => {
+      const invoice = await requireInvoice(deps, req.params.id);
+      if (invoice.status === "paid") {
+        throw new HttpError(409, "conflict", "Paid invoices cannot be cancelled");
+      }
+      if (invoice.status === "cancelled") {
+        res.json({ invoice: presentInvoice(invoice) });
+        return;
+      }
+      const next = { ...invoice, status: "cancelled" as const };
+      await deps.invoices!.update(next);
+      res.json({ invoice: presentInvoice(next) });
+    }),
+  );
+
   return router;
+}
+
+async function requireInvoice(
+  deps: { invoices?: InvoiceStore },
+  id: string,
+): Promise<Invoice> {
+  if (!deps.invoices) throw new HttpError(503, "unavailable", "Invoice store is not configured");
+  const invoice = await deps.invoices.get(id);
+  if (!invoice) throw new HttpError(404, "not_found", "Invoice not found");
+  return invoice;
+}
+
+async function issueInvoice(
+  invoice: Invoice,
+  deps: { invoices?: InvoiceStore; razorpay?: RazorpayClient },
+): Promise<Invoice> {
+  if (!deps.invoices) throw new HttpError(503, "unavailable", "Invoice store is not configured");
+  if (invoice.status === "paid") throw new HttpError(409, "conflict", "Invoice is already paid");
+  if (invoice.status === "cancelled") throw new HttpError(409, "conflict", "Cancelled invoices cannot be issued");
+  let paymentUrl = invoice.paymentUrl;
+  let razorpayPaymentLinkId = invoice.razorpayPaymentLinkId;
+  if (deps.razorpay?.configured && !paymentUrl) {
+    const link = await deps.razorpay.createPaymentLink({
+      amountPaise: invoice.totalPaise,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.number,
+      description: `${invoice.number} · ${invoice.label}`,
+      customer: {
+        name: invoice.customerName,
+        email: invoice.customerEmail,
+        contact: invoice.customerPhone,
+      },
+    });
+    razorpayPaymentLinkId = link.id;
+    paymentUrl = link.shortUrl;
+  }
+  const next: Invoice = {
+    ...invoice,
+    status: "issued",
+    issuedAt: invoice.issuedAt ?? new Date(),
+    razorpayPaymentLinkId,
+    paymentUrl,
+  };
+  await deps.invoices.update(next);
+  return next;
+}
+
+async function buildInvoiceFromBody(
+  body: Record<string, unknown>,
+  deps: { invoices: InvoiceStore; accounts?: AccountStore; gstRate: number },
+): Promise<Invoice> {
+  const skuRaw = typeof body.sku === "string" ? body.sku : "";
+  if (!isInvoiceSku(skuRaw)) {
+    throw new HttpError(400, "invalid", "Choose a catalogue item");
+  }
+  let accountId = typeof body.accountId === "string" && body.accountId ? body.accountId : null;
+  let name = typeof body.name === "string" ? body.name.trim() : "";
+  let email = typeof body.email === "string" ? body.email.trim() : "";
+  let phone = typeof body.phone === "string" && body.phone.trim() ? body.phone.trim() : null;
+  let organisation =
+    typeof body.organisation === "string" && body.organisation.trim() ? body.organisation.trim() : null;
+  if (accountId && deps.accounts) {
+    const account = await deps.accounts.getById(accountId);
+    if (!account) throw new HttpError(404, "not_found", "Account not found");
+    name = name || account.name;
+    email = email || account.email;
+    phone = phone || account.phone || null;
+    organisation = organisation || account.organisation || null;
+  }
+  if (!name || !email) {
+    throw new HttpError(400, "invalid", "Customer name and email are required");
+  }
+  const qty = body.qty !== undefined ? Number(body.qty) : 1;
+  const gstRate = body.gstRate !== undefined ? Number(body.gstRate) : deps.gstRate;
+  const rupees = body.unitAmountRupees !== undefined ? Number(body.unitAmountRupees) : undefined;
+  const unitAmountPaise = rupees !== undefined && Number.isFinite(rupees) ? rupeesToPaise(rupees) : undefined;
+  const line = lineFromSku(skuRaw, qty, unitAmountPaise, gstRate);
+  if (line.totalPaise < 100) {
+    throw new HttpError(400, "invalid", "Bill total must be at least ₹1");
+  }
+  const existing = await deps.invoices.list();
+  const dueAt =
+    typeof body.dueAt === "string" && body.dueAt
+      ? new Date(body.dueAt)
+      : addDays(new Date(), 14);
+  return {
+    id: `inv_${randomBytes(8).toString("hex")}`,
+    number: nextInvoiceNumber(existing.map((row) => row.number)),
+    accountId,
+    customerName: name,
+    customerEmail: email,
+    customerPhone: phone,
+    organisation,
+    sku: line.sku,
+    label: typeof body.label === "string" && body.label.trim() ? body.label.trim() : line.label,
+    qty: line.qty,
+    unitAmountPaise: line.unitAmountPaise,
+    gstRate: line.gstRate,
+    subtotalPaise: line.subtotalPaise,
+    gstPaise: line.gstPaise,
+    totalPaise: line.totalPaise,
+    currency: "INR",
+    status: "draft",
+    issuedAt: null,
+    dueAt,
+    paidAt: null,
+    grantAccessOnPay: Boolean(body.grantAccessOnPay),
+    razorpayPaymentLinkId: null,
+    paymentUrl: null,
+    razorpayPaymentId: null,
+    notes: typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null,
+    createdAt: new Date(),
+  };
 }

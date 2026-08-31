@@ -11,12 +11,20 @@ export type BillingSettings = {
   autoTrialOnSignup: boolean;
   defaultTrialDays: number;
   trialModules: ModuleFlags;
+  legalName: string;
+  gstin: string;
+  address: string;
+  gstRate: number;
 };
 
 export type AccountRecord = {
   id: string;
   email: string;
   name: string;
+  phone?: string | null;
+  age?: number | null;
+  city?: string | null;
+  organisation?: string | null;
   passwordHash: string;
   plan: Plan;
   trialEndsAt: Date | null;
@@ -41,6 +49,10 @@ export const DEFAULT_BILLING_SETTINGS: BillingSettings = {
   autoTrialOnSignup: true,
   defaultTrialDays: 14,
   trialModules: { assessments: true, community: true },
+  legalName: "Lokutara",
+  gstin: "",
+  address: "",
+  gstRate: 18,
 };
 
 export const ALL_MODULES_OFF: ModuleFlags = { assessments: false, community: false };
@@ -116,6 +128,10 @@ export function presentAccount(account: AccountRecord, now = new Date()) {
     id: account.id,
     email: account.email,
     name: account.name,
+    phone: account.phone ?? null,
+    age: account.age ?? null,
+    city: account.city ?? null,
+    organisation: account.organisation ?? null,
     seats: account.seats,
     createdAt: account.createdAt.toISOString(),
     access,

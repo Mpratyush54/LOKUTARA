@@ -13,6 +13,7 @@ import {
   mongoBillingSettingsStore,
   mongoEventStore,
   mongoExperimentConfigStore,
+  mongoInvoiceStore,
   mongoLeadStore,
   mongoPing,
   mongoReady,
@@ -21,6 +22,7 @@ import {
   mongoVisitorStore,
 } from "./stores/mongo";
 import { createRedisBundle } from "./stores/redis";
+import { createRazorpayClient } from "./payments/razorpay";
 
 // Load .env* before Mongo/Redis so custom-server boot sees local config.
 loadEnvConfig(process.cwd());
@@ -60,6 +62,9 @@ async function main() {
     billing: useMongo ? mongoBillingSettingsStore : memory.billingSettingsStore,
     threads: useMongo ? mongoThreadStore : memory.threadStore,
     assessmentRuns: useMongo ? mongoAssessmentRunStore : memory.assessmentRunStore,
+    invoices: useMongo ? mongoInvoiceStore : memory.invoiceStore,
+    razorpay: createRazorpayClient({ keyId: env.razorpayKeyId, keySecret: env.razorpayKeySecret }),
+    razorpayWebhookSecret: env.razorpayWebhookSecret,
     rateLimiter: redis ? redis.rateLimiter : memory.rateLimiter,
     trustProxy: env.trustProxy,
     adminSecret: env.adminDashboardSecret,

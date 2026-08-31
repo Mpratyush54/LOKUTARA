@@ -66,4 +66,15 @@ describe("community roles", () => {
     expect(presentAccount(account()).communityRole).toBe("student");
     expect(presentAccount(account({ communityRole: "specialist" })).communityRole).toBe("specialist");
   });
+
+  it("returns collected profile details", () => {
+    const shown = presentAccount(
+      account({ phone: "9876543210", age: 29, city: "Bengaluru", organisation: "Lokutara" }),
+    );
+    expect(shown.phone).toBe("9876543210");
+    expect(shown.age).toBe(29);
+    expect(shown.city).toBe("Bengaluru");
+    expect(shown.organisation).toBe("Lokutara");
+    expect(presentAccount(account()).phone).toBeNull();
+  });
 });

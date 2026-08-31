@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
+import { createHmac } from "node:crypto";
 import { createApiApp } from "../server/app";
 import { createMemoryStores } from "../server/stores/memory";
 import { CONSENT_COOKIE } from "../lib/tracking/consent";
@@ -7,6 +8,18 @@ import { presentLeadForAdmin } from "../server/routes/admin";
 
 const ADMIN_SECRET = "test-admin-secret";
 const ADMIN_EMAIL = "founder@lokutara.test";
+
+function signupPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "Pilot",
+    email: "pilot@lokutara.test",
+    password: "pass-word",
+    phone: "9876543210",
+    age: 34,
+    city: "Bengaluru",
+    ...overrides,
+  };
+}
 
 function app(opts: { adminSecret?: string | null; adminEmail?: string | null } = {}) {
   const adminSecret = "adminSecret" in opts ? opts.adminSecret! : ADMIN_SECRET;
@@ -25,6 +38,7 @@ function app(opts: { adminSecret?: string | null; adminEmail?: string | null } =
       billing: stores.billingSettingsStore,
       threads: stores.threadStore,
       assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
       adminSecret,
       adminEmail,
       health: {
@@ -184,13 +198,27 @@ describe("admin product snapshot", () => {
     expect(res.body.assessments.status).toBe("unset");
   });
 
+  it("returns people and activity on the admin overview", async () => {
+    const { server } = app();
+    await request(server).post("/api/auth/signup").send(signupPayload());
+    const overview = await request(server).get("/api/admin/overview").set("x-admin-secret", ADMIN_SECRET);
+    expect(overview.status).toBe(200);
+    expect(overview.body.accounts.total).toBe(1);
+    expect(overview.body.recent.people[0].email).toBe("pilot@lokutara.test");
+    expect(overview.body.recent.people[0].phone).toBe("9876543210");
+    expect(overview.body.recent.people[0].city).toBe("Bengaluru");
+    expect(overview.body.workspace.runs).toBe(0);
+    expect(overview.body.recent.threads).toEqual([]);
+    expect(Array.isArray(overview.body.series)).toBe(true);
+    expect(overview.body.recent.leads).toEqual([]);
+    expect(overview.body.commerce.revenueThisMonth).toBe(0);
+    expect(overview.body.commerce.peopleThisMonth).toBe(1);
+    expect(overview.body.series[0]).toHaveProperty("revenue");
+  });
+
   it("lets the founder grant and revoke a trial", async () => {
     const { server, stores } = app();
-    const signup = await request(server).post("/api/auth/signup").send({
-      name: "Pilot",
-      email: "pilot@lokutara.test",
-      password: "pass-word",
-    });
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload());
     const id = signup.body.account.id as string;
     await stores.accountStore.update({
       ...(await stores.accountStore.getById(id))!,
@@ -215,11 +243,9 @@ describe("admin product snapshot", () => {
 
   it("lets the founder set a community reply role", async () => {
     const { server } = app();
-    const signup = await request(server).post("/api/auth/signup").send({
-      name: "Pilot",
-      email: "role@lokutara.test",
-      password: "pass-word",
-    });
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ email: "role@lokutara.test" }),
+    );
     const id = signup.body.account.id as string;
     const granted = await request(server)
       .post(`/api/admin/accounts/${id}/access`)
@@ -227,5 +253,110 @@ describe("admin product snapshot", () => {
       .send({ action: "role", communityRole: "specialist" });
     expect(granted.status).toBe(200);
     expect(granted.body.account.communityRole).toBe("specialist");
+  });
+});
+
+describe("admin invoices", () => {
+  it("creates, issues via Razorpay, and marks paid from a signed webhook", async () => {
+    const stores = createMemoryStores();
+    const webhookSecret = "whsec-test";
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      adminSecret: ADMIN_SECRET,
+      razorpay: {
+        configured: true,
+        createPaymentLink: async () => ({ id: "plink_1", shortUrl: "https://rzp.io/i/test" }),
+      },
+      razorpayWebhookSecret: webhookSecret,
+    });
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload({ email: "bill@lokutara.test" }));
+    const accountId = signup.body.account.id as string;
+
+    const created = await request(server)
+      .post("/api/admin/invoices")
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({
+        accountId,
+        sku: "workshop",
+        grantAccessOnPay: true,
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.invoice.number).toMatch(/^LKT-26-/);
+    expect(created.body.invoice.totalPaise).toBe(2_950_000);
+    expect(created.body.invoice.status).toBe("draft");
+
+    const issued = await request(server)
+      .post(`/api/admin/invoices/${created.body.invoice.id}/issue`)
+      .set("x-admin-secret", ADMIN_SECRET);
+    expect(issued.status).toBe(200);
+    expect(issued.body.invoice.status).toBe("issued");
+    expect(issued.body.invoice.paymentUrl).toBe("https://rzp.io/i/test");
+
+    const payload = JSON.stringify({
+      event: "payment_link.paid",
+      payload: {
+        payment_link: {
+          entity: { id: "plink_1", notes: { invoiceId: created.body.invoice.id } },
+        },
+        payment: { entity: { id: "pay_1" } },
+      },
+    });
+    const denied = await request(server)
+      .post("/api/webhooks/razorpay")
+      .set("Content-Type", "application/json")
+      .set("x-razorpay-signature", "nope")
+      .send(payload);
+    expect(denied.status).toBe(401);
+
+    const signature = createHmac("sha256", webhookSecret).update(payload).digest("hex");
+    const paid = await request(server)
+      .post("/api/webhooks/razorpay")
+      .set("Content-Type", "application/json")
+      .set("x-razorpay-signature", signature)
+      .send(payload);
+    expect(paid.status).toBe(200);
+
+    const listed = await request(server).get("/api/admin/invoices").set("x-admin-secret", ADMIN_SECRET);
+    expect(listed.body.invoices[0].status).toBe("paid");
+    const account = await stores.accountStore.getById(accountId);
+    expect(account?.plan).toBe("paid");
+
+    const overview = await request(server).get("/api/admin/overview").set("x-admin-secret", ADMIN_SECRET);
+    expect(overview.body.commerce.revenueThisMonth).toBe(2_950_000);
+    expect(overview.body.commerce.paidThisMonth).toBe(1);
+  });
+
+  it("records an offline payment when Razorpay is not configured", async () => {
+    const { server } = app();
+    const created = await request(server)
+      .post("/api/admin/invoices")
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({
+        name: "Nandi Labs",
+        email: "ops@nandi.test",
+        sku: "counselling",
+        qty: 2,
+      });
+    expect(created.status).toBe(201);
+    const issued = await request(server)
+      .post(`/api/admin/invoices/${created.body.invoice.id}/issue`)
+      .set("x-admin-secret", ADMIN_SECRET);
+    expect(issued.body.invoice.status).toBe("issued");
+    expect(issued.body.invoice.paymentUrl).toBeNull();
+    const paid = await request(server)
+      .post(`/api/admin/invoices/${created.body.invoice.id}/record-payment`)
+      .set("x-admin-secret", ADMIN_SECRET);
+    expect(paid.body.invoice.status).toBe("paid");
   });
 });

@@ -1,6 +1,7 @@
-"use client";
+import type { DayPoint } from "@/lib/charts/series";
+import { formatInrFromPaise } from "@/lib/billing/invoices";
 
-export type DayPoint = { date: string; views: number; leads: number };
+export type { DayPoint };
 
 export function TrendChart({
   points,
@@ -8,10 +9,10 @@ export function TrendChart({
   label,
 }: {
   points: DayPoint[];
-  valueKey: "views" | "leads";
+  valueKey: "views" | "leads" | "signups" | "revenue";
   label: string;
 }) {
-  const values = points.map((point) => point[valueKey]);
+  const values = points.map((point) => point[valueKey] ?? 0);
   const max = Math.max(1, ...values);
   const width = 560;
   const height = 168;
@@ -28,12 +29,13 @@ export function TrendChart({
     .join(" ");
   const area = `${line} L${(coords.at(-1)?.x ?? pad).toFixed(1)} ${(height - pad).toFixed(1)} L${pad} ${(height - pad).toFixed(1)} Z`;
   const last = values.at(-1) ?? 0;
+  const lastLabel = valueKey === "revenue" ? formatInrFromPaise(last) : last;
 
   return (
     <figure className="chart-card">
       <figcaption>
         <span>{label}</span>
-        <strong className="num">{last}</strong>
+        <strong className="num">{lastLabel}</strong>
       </figcaption>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} over ${points.length} days`} preserveAspectRatio="none" className="chart-svg">
         {coords.length > 1 ? (
@@ -61,7 +63,7 @@ export function FunnelBars({
         <li key={step.label}>
           <div className="funnel-bars-meta">
             <span>{step.label}</span>
-            <span className="num">{step.value}</span>
+            <span className="num">{step.value.toLocaleString("en-IN")}</span>
           </div>
           <div className="funnel-track" aria-hidden="true">
             <span style={{ width: `${Math.max(6, (step.value / max) * 100)}%` }} />
