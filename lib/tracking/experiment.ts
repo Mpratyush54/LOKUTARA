@@ -18,7 +18,7 @@ export const KNOWN_EXPERIMENTS: Array<{ key: ExperimentKey; label: string; descr
   {
     key: "hero_cta",
     label: "Hero CTA",
-    description: "Primary homepage CTA copy (discovery call vs talk to founders).",
+    description: "Primary homepage CTA copy (discovery call vs get in touch).",
   },
 ];
 
@@ -84,7 +84,10 @@ export function resolveVariant(
 
 export function normalizeExperimentConfig(
   key: ExperimentKey,
-  patch: Partial<ExperimentConfig> | null | undefined,
+  patch:
+    | (Partial<Omit<ExperimentConfig, "key">> & { key?: string })
+    | null
+    | undefined,
 ): ExperimentConfig {
   const base = DEFAULT_EXPERIMENT_CONFIGS[key];
   const weights = {

@@ -13,6 +13,7 @@ function signupPayload(overrides: Record<string, unknown> = {}) {
     age: 29,
     city: "Bengaluru",
     organisation: "Lokutara",
+    acceptLegal: true,
     ...overrides,
   };
 }
@@ -75,6 +76,8 @@ describe("API", () => {
       phone: "9876543210",
       organisation: "Lokutara",
       sizeBand: "50-500",
+      privacyAccepted: true,
+      adultConfirmed: true,
     });
     expect(ok.status).toBe(201);
     expect(stores.leads).toHaveLength(1);
@@ -89,6 +92,8 @@ describe("API", () => {
         name: "Visitor",
         email: `v${i}@mail.test`,
         phone: "9876543210",
+        privacyAccepted: true,
+        adultConfirmed: true,
       });
       expect(res.status).toBe(201);
     }
@@ -97,6 +102,8 @@ describe("API", () => {
       name: "Visitor",
       email: "last@mail.test",
       phone: "9876543210",
+      privacyAccepted: true,
+      adultConfirmed: true,
     });
     expect(blocked.status).toBe(429);
     expect(blocked.body.error).toBe("rate_limited");
@@ -188,6 +195,7 @@ describe("API", () => {
       .post("/api/workspace/assessments/ocean/submit")
       .set("Cookie", cookie)
       .send({
+        consent: true,
         answers: {
           o1: { kind: "mcq", value: 4 },
           c1: { kind: "mcq", value: 4 },
@@ -223,6 +231,60 @@ describe("API", () => {
     expect(updated.body.account.age).toBe(31);
     expect(updated.body.account.city).toBe("Mysuru");
     expect(updated.body.account.organisation).toBe("Lokutara Labs");
+  });
+
+  it("exports account data and deletes assessment records after password confirmation", async () => {
+    const { server, stores } = app();
+    const signup = await request(server)
+      .post("/api/auth/signup")
+      .send(signupPayload({ email: "rights@lokutara.test" }));
+    const cookie = signup.headers["set-cookie"];
+    const submitted = await request(server)
+      .post("/api/workspace/assessments/ocean/submit")
+      .set("Cookie", cookie)
+      .send({
+        consent: true,
+        answers: {
+          o1: { kind: "mcq", value: 4 },
+          c1: { kind: "mcq", value: 4 },
+          e1: { kind: "mcq", value: 3 },
+          a1: { kind: "mcq", value: 5 },
+          n1: { kind: "mcq", value: 2 },
+        },
+      });
+    expect(submitted.status).toBe(201);
+
+    const exported = await request(server).get("/api/auth/data-export").set("Cookie", cookie);
+    expect(exported.status).toBe(200);
+    expect(exported.headers["content-disposition"]).toMatch(/attachment/);
+    expect(exported.body.account.email).toBe("rights@lokutara.test");
+    expect(exported.body.assessments).toHaveLength(1);
+    expect(exported.body.assessments[0].noticeVersion).toMatch(/assessment/);
+
+    const wrong = await request(server)
+      .delete("/api/auth/me")
+      .set("Cookie", cookie)
+      .send({ password: "wrong-password" });
+    expect(wrong.status).toBe(401);
+
+    const deleted = await request(server)
+      .delete("/api/auth/me")
+      .set("Cookie", cookie)
+      .send({ password: "pass-word" });
+    expect(deleted.status).toBe(200);
+    expect(await stores.accountStore.getByEmail("rights@lokutara.test")).toBeNull();
+    expect(await stores.assessmentRunStore.list()).toHaveLength(0);
+    expect((await request(server).get("/api/auth/me").set("Cookie", cookie)).status).toBe(401);
+  });
+
+  it("rejects browser mutations from another origin", async () => {
+    const { server } = app();
+    const result = await request(server)
+      .post("/api/auth/login")
+      .set("Origin", "https://attacker.example")
+      .set("Host", "lokutara.test")
+      .send({ email: "a@lokutara.test", password: "pass-word" });
+    expect(result.status).toBe(403);
   });
 
   it("rejects signup when profile details are missing", async () => {
@@ -279,6 +341,7 @@ describe("API", () => {
         title: "How do we brief managers after a workshop?",
         body: "We need a short ritual that does not dump a psychometric report on them.",
         tags: ["leadership"],
+        communityNoticeAccepted: true,
       });
     expect(asked.status).toBe(201);
     const threadId = asked.body.thread.id as string;
@@ -307,5 +370,176 @@ describe("API", () => {
       .send({ body: "Here is a specialist-grade answer that students must not post." });
     expect(allowed.status).toBe(201);
     expect(allowed.body.thread.answers).toHaveLength(1);
+  });
+
+  it("lets an expired trial start Razorpay checkout without opening the workspace", async () => {
+    const stores = createMemoryStores();
+    const links: Array<{ invoiceId: string; callbackUrl?: string | null }> = [];
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      adminSecret: "test-admin-secret",
+      razorpay: {
+        configured: true,
+        createPaymentLink: async (input) => {
+          links.push({ invoiceId: input.invoiceId, callbackUrl: input.callbackUrl });
+          return { id: "plink_c", shortUrl: "https://rzp.io/i/customer" };
+        },
+      },
+      health: {
+        storeBackend: "memory",
+        mongoConfigured: false,
+        mongoOk: () => false,
+        redisConfigured: false,
+        redisStatus: () => "disabled",
+        redisOk: () => true,
+      },
+    });
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ email: "pay@lokutara.test" }),
+    );
+    const cookie = signup.headers["set-cookie"];
+    const account = await stores.accountStore.getById(signup.body.account.id);
+    await stores.accountStore.update({ ...account!, trialEndsAt: new Date("2020-01-01T00:00:00.000Z") });
+
+    const blocked = await request(server).get("/api/workspace/home").set("Cookie", cookie);
+    expect(blocked.status).toBe(402);
+
+    const me = await request(server).get("/api/billing/me").set("Cookie", cookie);
+    expect(me.status).toBe(200);
+    expect(me.body.catalog[0].sku).toBe("app_access");
+    expect(me.body.razorpayConfigured).toBe(true);
+
+    const checkout = await request(server)
+      .post("/api/billing/checkout")
+      .set("Cookie", cookie)
+      .send({ sku: "app_access" });
+    expect(checkout.status).toBe(201);
+    expect(checkout.body.paymentUrl).toBe("https://rzp.io/i/customer");
+    expect(checkout.body.invoice.grantAccessOnPay).toBe(true);
+    expect(checkout.body.invoice.totalPaise).toBe(589_882);
+    expect(links[0]?.callbackUrl).toContain("/app/billing?paid=1");
+
+    const again = await request(server)
+      .post("/api/billing/checkout")
+      .set("Cookie", cookie)
+      .send({ sku: "app_access" });
+    expect(again.status).toBe(200);
+    expect(again.body.invoice.id).toBe(checkout.body.invoice.id);
+  });
+
+  it("lets a guest start Razorpay checkout for a workshop without a login", async () => {
+    const stores = createMemoryStores();
+    const links: Array<{ callbackUrl?: string | null }> = [];
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      razorpay: {
+        configured: true,
+        createPaymentLink: async (input) => {
+          links.push({ callbackUrl: input.callbackUrl });
+          return { id: "plink_g", shortUrl: "https://rzp.io/i/guest" };
+        },
+      },
+      health: {
+        storeBackend: "memory",
+        mongoConfigured: false,
+        mongoOk: () => false,
+        redisConfigured: false,
+        redisStatus: () => "disabled",
+        redisOk: () => true,
+      },
+    });
+
+    const catalog = await request(server).get("/api/billing/catalog");
+    expect(catalog.status).toBe(200);
+    expect(catalog.body.catalog.some((item: { sku: string }) => item.sku === "workshop")).toBe(true);
+
+    const guest = await request(server).post("/api/billing/guest-checkout").send({
+      sku: "workshop",
+      name: "Priya Nair",
+      email: "priya@company.test",
+      phone: "9876543210",
+      organisation: "Nair Labs",
+      checkoutLegalAccepted: true,
+      adultConfirmed: true,
+    });
+    expect(guest.status).toBe(201);
+    expect(guest.body.paymentUrl).toBe("https://rzp.io/i/guest");
+    expect(links[0]?.callbackUrl).toContain("offer=workshop");
+    expect(links[0]?.callbackUrl).toContain("paid=1");
+
+    const blocked = await request(server).post("/api/billing/guest-checkout").send({
+      sku: "app_access",
+      name: "Priya Nair",
+      email: "nobody@company.test",
+      phone: "9876543210",
+      checkoutLegalAccepted: true,
+      adultConfirmed: true,
+    });
+    expect(blocked.status).toBe(401);
+  });
+
+  it("returns a readable report after an assessment run", async () => {
+    const { server } = app();
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ email: "report@lokutara.test" }),
+    );
+    const cookie = signup.headers["set-cookie"];
+    const submitted = await request(server)
+      .post("/api/workspace/assessments/ocean/submit")
+      .set("Cookie", cookie)
+      .send({
+        consent: true,
+        answers: {
+          o1: { kind: "mcq", value: 5 },
+          c1: { kind: "mcq", value: 4 },
+          e1: { kind: "mcq", value: 3 },
+          a1: { kind: "mcq", value: 4 },
+          n1: { kind: "mcq", value: 2 },
+        },
+      });
+    expect(submitted.status).toBe(201);
+    expect(submitted.body.report.headline).toBeTruthy();
+    expect(submitted.body.report.bands).toHaveLength(5);
+    const runId = submitted.body.run.id as string;
+    expect(submitted.body.run.title).toMatch(/ocean/i);
+
+    const opened = await request(server)
+      .get(`/api/workspace/assessments/runs/${runId}`)
+      .set("Cookie", cookie);
+    expect(opened.status).toBe(200);
+    expect(opened.body.report.title).toBe("Trait profile (OCEAN)");
+    expect(opened.body.report.bands[0].label).toBe("Openness");
+
+    const pdf = await request(server).get(`/api/workspace/assessments/runs/${runId}/pdf`).set("Cookie", cookie);
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers["content-type"]).toMatch(/pdf/);
+    const bytes = Buffer.isBuffer(pdf.body) ? pdf.body : Buffer.from(pdf.text || pdf.body);
+    const text = bytes.toString("latin1");
+    expect(text.slice(0, 5)).toBe("%PDF-");
+    expect(text).toContain("Openness");
+    expect(text).toContain("Overall score");
+    expect(text).toContain("Strongly agree");
   });
 });

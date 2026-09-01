@@ -76,11 +76,50 @@ describe("AppShell", () => {
       </AppShell>,
     );
     await waitFor(() => expect(screen.getByText("Inside workspace")).toBeInTheDocument());
-    expect(screen.getAllByRole("link", { name: "Home" })[0]).toHaveAttribute("href", "/app");
+    expect(screen.getAllByRole("link", { name: "Dashboard" })[0]).toHaveAttribute("href", "/app");
     expect(screen.getAllByRole("link", { name: "Assessments" })[0]).toHaveAttribute("href", "/app/assessments");
     expect(screen.getAllByRole("link", { name: "Community" })[0]).toHaveAttribute("href", "/app/community");
-    expect(screen.getAllByRole("link", { name: "Account" })[0]).toHaveAttribute("href", "/app/account");
+    expect(screen.getAllByRole("link", { name: "Billing" })[0]).toHaveAttribute("href", "/app/billing");
+    expect(screen.getAllByRole("link", { name: "Profile" })[0]).toHaveAttribute("href", "/app/account");
+    expect(screen.getByTestId("upgrade-banner")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /upgrade now/i }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("link", { name: /^tests$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^forum$/i })).not.toBeInTheDocument();
+  });
+
+  it("lets a signed-in expired trial pay from the paywall", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        account: {
+          id: "acc_1",
+          email: "asha@lokutara.test",
+          name: "Asha",
+          seats: 1,
+          createdAt: "2026-08-01T00:00:00.000Z",
+          access: {
+            status: "expired",
+            plan: "trial",
+            trialEndsAt: "2026-08-01T00:00:00.000Z",
+            daysLeft: 0,
+            modules: { assessments: false, community: false },
+            canEnterApp: false,
+          },
+        },
+      }),
+    } as Response);
+    render(
+      <AppShell>
+        <p>Secret module</p>
+      </AppShell>,
+    );
+    expect(await screen.findByTestId("paywall")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /upgrade now/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /see plans/i })).toHaveAttribute("href", "/app/billing");
+    expect(screen.getByRole("link", { name: /get in touch/i })).toHaveAttribute("href", "/#contact");
+    expect(screen.queryByRole("link", { name: /talk to founder/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /start free trial/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Secret module")).not.toBeInTheDocument();
   });
 });

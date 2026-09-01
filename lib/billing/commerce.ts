@@ -1,5 +1,5 @@
 import type { StoredAnalyticsEvent } from "../tracking/events";
-import type { Invoice } from "./invoices";
+import { countsTowardRevenue, isComplimentaryInvoice, type Invoice } from "./invoices";
 import {
   inRange,
   istYmd,
@@ -50,7 +50,7 @@ function countCreated<T extends { createdAt: Date }>(rows: T[], start: Date, end
 function paidRevenue(invoices: Invoice[], start: Date, end: Date): number {
   let sum = 0;
   for (const invoice of invoices) {
-    if (invoice.status !== "paid" || !invoice.paidAt) continue;
+    if (!invoice.paidAt || !countsTowardRevenue(invoice)) continue;
     if (!inRange(invoice.paidAt, start, end)) continue;
     sum += invoice.totalPaise;
   }
@@ -80,7 +80,10 @@ export function computeCommerce(
     revenueLastMonth === 0 ? (revenueThisMonth === 0 ? 0 : null) : (revenueThisMonth - revenueLastMonth) / revenueLastMonth;
 
   const outstandingPaise = input.invoices
-    .filter((invoice) => invoice.status === "issued" || invoice.status === "draft")
+    .filter(
+      (invoice) =>
+        !isComplimentaryInvoice(invoice) && (invoice.status === "issued" || invoice.status === "draft"),
+    )
     .reduce((sum, invoice) => sum + invoice.totalPaise, 0);
 
   const series: DayPoint[] = [];
@@ -102,7 +105,7 @@ export function computeCommerce(
     series[i].signups += 1;
   }
   for (const invoice of input.invoices) {
-    if (invoice.status !== "paid" || !invoice.paidAt) continue;
+    if (!invoice.paidAt || !countsTowardRevenue(invoice)) continue;
     const i = index.get(istYmd(invoice.paidAt));
     if (i === undefined) continue;
     series[i].revenue += invoice.totalPaise;
@@ -115,7 +118,8 @@ export function computeCommerce(
     momRevenuePct,
     invoicesThisMonth: countCreated(input.invoices, thisMonth, nextMonth),
     paidThisMonth: input.invoices.filter(
-      (invoice) => invoice.status === "paid" && invoice.paidAt && inRange(invoice.paidAt, thisMonth, nextMonth),
+      (invoice) =>
+        countsTowardRevenue(invoice) && invoice.paidAt && inRange(invoice.paidAt, thisMonth, nextMonth),
     ).length,
     outstandingPaise,
     peopleThisMonth: countCreated(input.accounts, thisMonth, nextMonth),

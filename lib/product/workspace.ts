@@ -186,6 +186,25 @@ export function relativeDay(iso: string, now = new Date()): string {
   return date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
+export function assessmentTitle(id: string): string {
+  return LOCAL_ASSESSMENTS.find((item) => item.id === id)?.title ?? id;
+}
+
+export function presentAssessmentRun(run: {
+  id: string;
+  assessmentId: string;
+  score: number;
+  createdAt: Date;
+}) {
+  return {
+    id: run.id,
+    assessmentId: run.assessmentId,
+    title: assessmentTitle(run.assessmentId),
+    score: run.score,
+    createdAt: run.createdAt.toISOString(),
+  };
+}
+
 /** Forum production reply policy — shown in the community UI, not only in routes. */
 export const COMMUNITY_REPLY_RULES = [
   {

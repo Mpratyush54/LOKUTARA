@@ -39,6 +39,9 @@ export function requireAppSession(deps: { accounts: AccountStore; sessions: AppS
       if (!session) throw new HttpError(401, "unauthorized", "Session expired");
       const account = await deps.accounts.getById(session.accountId);
       if (!account) throw new HttpError(401, "unauthorized", "Account missing");
+      if (typeof account.age === "number" && account.age < 18) {
+        throw new HttpError(403, "adult_required", "Lokutara accounts are for adults aged 18 or older");
+      }
       req.accountId = account.id;
       req.account = account;
       next();

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { validateLead } from "../../lib/leads/validate";
+import { ACCOUNT_NOTICE_VERSION } from "../../lib/legal/compliance";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import type { LeadStore, RateLimiter } from "../stores/memory";
 
@@ -21,6 +22,9 @@ export function createLeadsRouter(deps: { leads: LeadStore; rateLimiter: RateLim
         id: randomUUID(),
         createdAt: new Date(),
         visitorId: typeof req.body?.visitorId === "string" ? req.body.visitorId : null,
+        consentedAt: new Date(),
+        adultConfirmedAt: new Date(),
+        privacyNoticeVersion: ACCOUNT_NOTICE_VERSION,
       });
 
       res.status(201).json({

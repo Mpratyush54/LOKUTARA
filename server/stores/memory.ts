@@ -13,6 +13,9 @@ export type StoredLead = ValidLead & {
   id: string;
   createdAt: Date;
   visitorId: string | null;
+  consentedAt: Date;
+  adultConfirmedAt: Date;
+  privacyNoticeVersion: string;
 };
 
 export type StoredVisitor = {
@@ -84,6 +87,8 @@ export type AssessmentRun = {
   assessmentId: string;
   answers: Record<string, unknown>;
   score: number;
+  consentedAt: Date;
+  noticeVersion: string;
   createdAt: Date;
 };
 
@@ -93,12 +98,14 @@ export type AccountStore = {
   getById(id: string): Promise<AccountRecord | null>;
   list(): Promise<AccountRecord[]>;
   update(account: AccountRecord): Promise<AccountRecord>;
+  delete(id: string): Promise<void>;
 };
 
 export type AppSessionStore = {
   create(session: AppSession): Promise<void>;
   get(token: string): Promise<AppSession | null>;
   delete(token: string): Promise<void>;
+  deleteByAccount(accountId: string): Promise<void>;
 };
 
 export type BillingSettingsStore = {
@@ -113,6 +120,7 @@ export type ThreadStore = {
   addAnswer(id: string, answer: LocalAnswer): Promise<LocalThread | null>;
   incrementViews(id: string): Promise<LocalThread | null>;
   toggleUpvote(threadId: string, answerId: string, accountId: string): Promise<LocalThread | null>;
+  anonymizeByAccount(accountId: string): Promise<void>;
 };
 
 export type InvoiceStore = {
@@ -125,8 +133,10 @@ export type InvoiceStore = {
 
 export type AssessmentRunStore = {
   insert(run: AssessmentRun): Promise<AssessmentRun>;
+  get(id: string): Promise<AssessmentRun | null>;
   listByAccount(accountId: string): Promise<AssessmentRun[]>;
   list(): Promise<AssessmentRun[]>;
+  deleteByAccount(accountId: string): Promise<void>;
 };
 
 export type StoreBackend = "memory" | "mongo";
@@ -252,6 +262,11 @@ export function createMemoryStores() {
       accountsByEmail.set(account.email.toLowerCase(), account.id);
       return account;
     },
+    async delete(id) {
+      const account = accounts.get(id);
+      if (account) accountsByEmail.delete(account.email.toLowerCase());
+      accounts.delete(id);
+    },
   };
 
   const appSessionStore: AppSessionStore = {
@@ -259,10 +274,20 @@ export function createMemoryStores() {
       appSessions.set(session.token, session);
     },
     async get(token) {
-      return appSessions.get(token) ?? null;
+      const session = appSessions.get(token) ?? null;
+      if (session && Date.now() - session.createdAt.getTime() > 30 * 24 * 60 * 60 * 1000) {
+        appSessions.delete(token);
+        return null;
+      }
+      return session;
     },
     async delete(token) {
       appSessions.delete(token);
+    },
+    async deleteByAccount(accountId) {
+      for (const [token, session] of appSessions) {
+        if (session.accountId === accountId) appSessions.delete(token);
+      }
     },
   };
 
@@ -311,6 +336,22 @@ export function createMemoryStores() {
       answer.upvotes = answer.upvotedBy.length;
       return thread;
     },
+    async anonymizeByAccount(accountId) {
+      for (const thread of threads) {
+        if (thread.authorId === accountId) {
+          thread.authorId = "deleted";
+          thread.authorName = "Former member";
+        }
+        for (const answer of thread.answers) {
+          if (answer.authorId === accountId) {
+            answer.authorId = "deleted";
+            answer.authorName = "Former member";
+          }
+          answer.upvotedBy = answer.upvotedBy.filter((id) => id !== accountId);
+          answer.upvotes = answer.upvotedBy.length;
+        }
+      }
+    },
   };
 
   const assessmentRunStore: AssessmentRunStore = {
@@ -318,11 +359,19 @@ export function createMemoryStores() {
       assessmentRuns.push(run);
       return run;
     },
+    async get(id) {
+      return assessmentRuns.find((run) => run.id === id) ?? null;
+    },
     async listByAccount(accountId) {
       return assessmentRuns.filter((run) => run.accountId === accountId).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
     async list() {
       return [...assessmentRuns];
+    },
+    async deleteByAccount(accountId) {
+      for (let index = assessmentRuns.length - 1; index >= 0; index -= 1) {
+        if (assessmentRuns[index].accountId === accountId) assessmentRuns.splice(index, 1);
+      }
     },
   };
 

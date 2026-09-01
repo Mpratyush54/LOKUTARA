@@ -1,50 +1,54 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { LOCAL_ASSESSMENTS } from "@/lib/product/workspace";
+import { useEffect, useMemo, useState } from "react";
+import { LOCAL_ASSESSMENTS, relativeDay } from "@/lib/product/workspace";
 import { jsonFetch, useAppAccount } from "@/components/app/AppShell";
+import { showAppToast } from "@/components/app/AppToast";
 
 type HomePayload = {
-  runs: Array<{ id: string; assessmentId: string; score: number; createdAt: string }>;
+  runs: Array<{ id: string; assessmentId: string; title?: string; score: number; createdAt: string }>;
   threadCount: number;
-  recentThreads: Array<{ id: string; title: string; answerCount: number }>;
+  recentThreads: Array<{ id: string; title: string; answerCount: number; createdAt?: string }>;
 };
 
 function titleFor(id: string) {
   return LOCAL_ASSESSMENTS.find((item) => item.id === id)?.title ?? id;
 }
 
-const FIRST_ASSESSMENT = LOCAL_ASSESSMENTS.find((item) => item.recommended)?.id ?? "psychology";
+function greeting(now = new Date()) {
+  const hour = now.getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
 
 export function AppHome() {
   const account = useAppAccount();
   const [data, setData] = useState<HomePayload | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
       const { res, body } = await jsonFetch("/api/workspace/home");
       if (!res.ok) {
-        setError(body.message || "Could not load your workspace");
+        showAppToast(body.message || "Could not load your workspace. Try again in a moment.");
+        setData({ runs: [], threadCount: 0, recentThreads: [] });
         return;
       }
       setData(body as HomePayload);
     })();
   }, []);
 
-  if (!data && !error) {
+  const taken = useMemo(() => new Set((data?.runs || []).map((run) => run.assessmentId)), [data]);
+  const nextAssessment = LOCAL_ASSESSMENTS.find((item) => !taken.has(item.id)) ?? LOCAL_ASSESSMENTS[0];
+  const finishedAll = LOCAL_ASSESSMENTS.every((item) => taken.has(item.id));
+  const lastRun = data?.runs[0];
+
+  if (!data) {
     return (
-      <div className="module-stack" aria-busy="true" data-testid="home-skeleton">
+      <div className="dash-home" aria-busy="true" data-testid="home-skeleton">
         <div className="app-skeleton app-skeleton-hero" />
-        <div className="dash-stats">
-          <div className="app-skeleton app-skeleton-stat" />
-          <div className="app-skeleton app-skeleton-stat" />
-          <div className="app-skeleton app-skeleton-stat" />
-          <div className="app-skeleton app-skeleton-stat" />
-        </div>
-        <div className="module-grid">
-          <div className="app-skeleton app-skeleton-card" />
+        <div className="dash-layout">
           <div className="app-skeleton app-skeleton-card" />
           <div className="app-skeleton app-skeleton-card" />
         </div>
@@ -52,118 +56,125 @@ export function AppHome() {
     );
   }
 
-  const lastRun = data?.runs[0];
   const days = account?.access.daysLeft;
   const firstName = account?.name?.split(" ")[0] || "there";
-  const planLine =
+  const planLabel =
     account?.access.status === "trial" && days != null
-      ? `${days} day${days === 1 ? "" : "s"} left on trial`
+      ? `${days} day${days === 1 ? "" : "s"} left`
       : account?.access.status === "paid"
-        ? "Paid access"
-        : account?.access.status ?? "Trial";
+        ? "Paid"
+        : "Trial";
+
+  const briefTitle = finishedAll
+    ? "You have finished the catalog"
+    : lastRun
+      ? `Next: ${nextAssessment.title}`
+      : `Start with ${nextAssessment.title}`;
+  const briefCopy = finishedAll
+    ? "Open a report, or ask the community a follow-up from a workshop."
+    : nextAssessment.copy;
+  const briefHref = finishedAll
+    ? lastRun
+      ? `/app/assessments/runs/${lastRun.id}`
+      : "/app/assessments"
+    : `/app/assessments/${nextAssessment.id}`;
+  const briefCta = finishedAll ? "View report" : lastRun ? "Continue" : "Start now";
 
   return (
-    <div className="module-stack dash-home">
-      <header className="dash-in">
-        <p className="eyebrow">Workspace</p>
-        <h1>Hello, {firstName}</h1>
-        <p className="lead">
-          Assessments and community sit in this one dashboard. {planLine}.
-        </p>
+    <div className="dash-home">
+      <header className="dash-top dash-in">
+        <div>
+          <p className="eyebrow">Dashboard</p>
+          <h1>
+            {greeting()}, {firstName}
+          </h1>
+          <p className="lead">
+            {account?.city ? `${account.city}. ` : null}
+            {account?.organisation ? `${account.organisation}. ` : null}
+            {data?.runs.length
+              ? `${data.runs.length} screen${data.runs.length === 1 ? "" : "s"} on file.`
+              : "Take a screen, then ask a question if you want a second view."}
+          </p>
+        </div>
+        <div className="dash-top-meta">
+          <span className="app-plan-pill">{planLabel}</span>
+          {account?.email ? <p className="meta">{account.email}</p> : null}
+        </div>
       </header>
 
-      {error ? <p className="app-error">{error}</p> : null}
-
-      <div className="dash-stats dash-in delay-1">
-        <div className="folio-stat">
-          <p className="meta">Screens taken</p>
-          <p className="num folio-num">{data?.runs.length ?? 0}</p>
+      <section className="dash-brief dash-in delay-1">
+        <div>
+          <p className="eyebrow">{finishedAll ? "Caught up" : lastRun ? "Continue" : "Start here"}</p>
+          <h2>{briefTitle}</h2>
+          <p>{briefCopy}</p>
+          {!finishedAll ? <p className="meta">{nextAssessment.duration} · {nextAssessment.items.length} items</p> : null}
         </div>
-        <div className="folio-stat">
-          <p className="meta">Last score</p>
-          <p className="num folio-num">{lastRun?.score ?? "—"}</p>
-        </div>
-        <div className="folio-stat">
-          <p className="meta">Threads</p>
-          <p className="num folio-num">{data?.threadCount ?? 0}</p>
-        </div>
-        <div className="folio-stat">
-          <p className="meta">Plan</p>
-          <p className="folio-plan">{planLine}</p>
-        </div>
-      </div>
-
-      {data?.runs.length ? (
-        <div className="score-ruler dash-in delay-2" aria-label="Recent scores">
-          {data.runs
-            .slice()
-            .reverse()
-            .map((run) => (
-              <span key={run.id} className="score-tick" style={{ height: `${Math.max(12, run.score)}%` }} title={`${titleFor(run.assessmentId)} · ${run.score}`} />
-            ))}
-        </div>
-      ) : null}
-
-      <div className="module-grid">
-        <Link href="/app/assessments" className="module-card folio-card dash-in delay-2">
-          <p className="eyebrow">Measure</p>
-          <h2>Assessments</h2>
-          <p>
-            {lastRun
-              ? `Last run: ${titleFor(lastRun.assessmentId)} scored ${lastRun.score}.`
-              : "Start with a workshop screen. Results stay in this workspace."}
-          </p>
-          <span className="folio-cta">{lastRun ? "Open catalog" : "Take first screen"}</span>
-        </Link>
-        <Link href="/app/community" className="module-card folio-card dash-in delay-3">
-          <p className="eyebrow">Connect</p>
-          <h2>Community</h2>
-          <p>
-            {data?.threadCount
-              ? `${data.threadCount} thread${data.threadCount === 1 ? "" : "s"} in this workspace.`
-              : "Ask a question after a workshop. Same login, same product."}
-          </p>
-          <span className="folio-cta">{data?.threadCount ? "Browse threads" : "Open community"}</span>
-        </Link>
-        <Link href="/app/account" className="module-card folio-card dash-in delay-4">
-          <p className="eyebrow">Billing</p>
-          <h2>Account</h2>
-          <p>Trial, paid access, and which modules you can open.</p>
-          <span className="folio-cta">View access</span>
-        </Link>
-      </div>
-
-      <section className="dash-next dash-in delay-3">
-        <h2 className="admin-h2">Next step</h2>
-        <div className="dash-next-row">
-          <Link className="btn btn-primary" href={lastRun ? "/app/assessments" : `/app/assessments/${FIRST_ASSESSMENT}`}>
-            {lastRun ? "Run another assessment" : `Start ${titleFor(FIRST_ASSESSMENT)}`}
+        <div className="dash-brief-actions">
+          <Link className="btn btn-primary" href={briefHref}>
+            {briefCta}
           </Link>
           <Link className="btn btn-secondary" href="/app/community/ask">
-            Ask the community
+            Ask a question
           </Link>
         </div>
       </section>
 
-      <section className="dash-in delay-4">
-        <h2 className="admin-h2">Recent threads</h2>
-        {data?.recentThreads.length ? (
-          <ul className="thread-list">
-            {data.recentThreads.map((thread) => (
-              <li key={thread.id}>
-                <Link href={`/app/community/${thread.id}`} className="thread-card">
-                  <h2>{thread.title}</h2>
-                  <p className="meta">{thread.answerCount} replies</p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="product-empty">
-            No threads yet. Ask one question after a session — it stays in this dashboard, not a second forum.
-          </p>
-        )}
-      </section>
+      <div className="dash-layout">
+        <section className="dash-panel dash-in delay-2">
+          <div className="dash-panel-head">
+            <h2>Recent screens</h2>
+            <Link href="/app/assessments">All assessments</Link>
+          </div>
+          {data?.runs.length ? (
+            <ul className="dash-runs">
+              {data.runs.map((run) => (
+                <li key={run.id}>
+                  <Link href={`/app/assessments/runs/${run.id}`} className="dash-run">
+                    <div>
+                      <strong>{run.title || titleFor(run.assessmentId)}</strong>
+                      <p className="meta">{relativeDay(run.createdAt)} · View report</p>
+                    </div>
+                    <div className="dash-run-score">
+                      <span className="dash-run-track" aria-hidden="true">
+                        <span style={{ width: `${Math.max(8, run.score)}%` }} />
+                      </span>
+                      <span className="num">{run.score}</span>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="dash-empty">
+              No screens yet. Start with {nextAssessment.title} — {nextAssessment.duration}.
+            </p>
+          )}
+        </section>
+
+        <section className="dash-panel dash-in delay-3">
+          <div className="dash-panel-head">
+            <h2>Community</h2>
+            <Link href="/app/community">Open feed</Link>
+          </div>
+          {data?.recentThreads.length ? (
+            <ul className="dash-threads">
+              {data.recentThreads.map((thread) => (
+                <li key={thread.id}>
+                  <Link href={`/app/community/${thread.id}`} className="dash-thread">
+                    <strong>{thread.title}</strong>
+                    <p className="meta">
+                      {thread.answerCount} {thread.answerCount === 1 ? "reply" : "replies"}
+                      {thread.createdAt ? ` · ${relativeDay(thread.createdAt)}` : ""}
+                    </p>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="dash-empty">No threads yet. Ask one after a session — it stays in this workspace.</p>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

@@ -27,7 +27,7 @@ export const GUIDE_SIZE_OPTIONS: Array<{ id: SizeBand; label: string }> = [
 
 export const GUIDE_QUESTIONS = {
   who: {
-    kicker: "Question 1",
+    kicker: "Question 2",
     prompt: "Who are you looking to support?",
     options: [
       { id: "a", label: "Myself" },
@@ -38,7 +38,7 @@ export const GUIDE_QUESTIONS = {
     ],
   },
   noticing: {
-    kicker: "Question 2",
+    kicker: "Question 3",
     prompt: "What are you noticing right now?",
     hint: "The problem, not the service.",
     options: [
@@ -50,7 +50,7 @@ export const GUIDE_QUESTIONS = {
     ],
   },
   affected: {
-    kicker: "Question 3",
+    kicker: "Question 4",
     prompt: "Who is most affected by this?",
     hint: "Scale, and whether this needs one intervention or a combination.",
     options: [
@@ -62,7 +62,7 @@ export const GUIDE_QUESTIONS = {
     ],
   },
   success: {
-    kicker: "Question 4",
+    kicker: "Question 5",
     prompt: "What would success look like?",
     hint: "The end goal, not the catalogue item.",
     options: [
@@ -77,37 +77,49 @@ export const GUIDE_QUESTIONS = {
 
 export const GUIDE_SERVICES: Record<
   GuideServiceId,
-  { title: string; verb: string; blurb: string }
+  { title: string; verb: string; blurb: string; sellId: string | null; sku: string | null }
 > = {
   psychologists: {
     title: "Ask the Psychologists",
     verb: "Ask",
     blurb: "Thoughtful, psychology-informed answers from our panel. Not an emergency line.",
+    sellId: "counselling",
+    sku: "counselling",
   },
   psychometrics: {
     title: "Psychometric & Competency Assessment",
     verb: "Understand",
     blurb: "Psychometric assessment and competency mapping, so you can see strengths and development areas.",
+    sellId: "workspace",
+    sku: "app_access",
   },
   training: {
     title: "Workplace Training",
     verb: "Develop",
     blurb: "Practical training in workplace management, communication, collaboration, and team effectiveness.",
+    sellId: "workshop",
+    sku: "workshop",
   },
   leadership: {
     title: "Leadership Development",
     verb: "Lead",
     blurb: "Leadership assessment plus development for people who have to lead teams.",
+    sellId: "full_day",
+    sku: "full_day",
   },
   counselling: {
     title: "1-to-1 Counselling",
     verb: "Support",
     blurb: "Confidential counselling with qualified mental-health professionals. Non-emergency only.",
+    sellId: "counselling",
+    sku: "counselling",
   },
   discovery: {
     title: "Assessment / Discovery",
     verb: "Clarify",
     blurb: "A complimentary discovery call to understand what’s going on before you buy a programme.",
+    sellId: null,
+    sku: null,
   },
 };
 

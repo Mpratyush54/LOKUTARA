@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { LegalContact, LegalNav } from "@/components/legal/LegalNav";
+import { CookieSettings } from "@/components/consent/CookieSettings";
 
 export const metadata: Metadata = {
   title: "Cookie policy · Lokutara",
@@ -58,13 +60,16 @@ export default function CookiesPage() {
         </section>
 
         <section>
-          <h2>Contact</h2>
-          <p>
-            Questions about privacy or cookies for Lokutara in Bengaluru: reach us through the
-            discovery call form on the homepage.
-          </p>
+          <h2>Change or withdraw your choice</h2>
+          <CookieSettings />
         </section>
 
+        <section>
+          <h2>Contact</h2>
+          <LegalContact />
+        </section>
+
+        <LegalNav />
         <p className="legal-back">
           <Link href="/">Back to Lokutara</Link>
         </p>

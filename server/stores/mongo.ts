@@ -45,12 +45,13 @@ const EventSchema = new mongoose.Schema(
     country: String,
     city: String,
     props: { type: Object, default: {} },
-    at: { type: Date, index: true },
+    at: Date,
   },
   { collection: "events" },
 );
 EventSchema.index({ visitorId: 1, at: -1 });
 EventSchema.index({ name: 1, at: -1 });
+EventSchema.index({ at: 1 }, { expireAfterSeconds: 395 * 24 * 60 * 60 });
 
 const LeadSchema = new mongoose.Schema(
   {
@@ -64,10 +65,14 @@ const LeadSchema = new mongoose.Schema(
     sizeBand: String,
     preferredTime: String,
     visitorId: { type: String, index: true },
-    createdAt: { type: Date, default: Date.now, index: true },
+    consentedAt: Date,
+    adultConfirmedAt: Date,
+    privacyNoticeVersion: String,
+    createdAt: { type: Date, default: Date.now },
   },
   { collection: "leads" },
 );
+LeadSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 60 * 60 });
 
 const VisitorSchema = new mongoose.Schema(
   {
@@ -75,24 +80,26 @@ const VisitorSchema = new mongoose.Schema(
     firstTouch: Object,
     lastTouch: Object,
     firstSeenAt: Date,
-    lastSeenAt: { type: Date, index: true },
+    lastSeenAt: Date,
     userId: { type: String, index: true, sparse: true },
   },
   { collection: "visitors" },
 );
+VisitorSchema.index({ lastSeenAt: 1 }, { expireAfterSeconds: 395 * 24 * 60 * 60 });
 
 const SessionSchema = new mongoose.Schema(
   {
     sessionId: { type: String, unique: true },
     visitorId: { type: String, index: true },
     startedAt: Date,
-    lastSeenAt: { type: Date, index: true },
+    lastSeenAt: Date,
     landingPage: String,
     device: String,
     eventCount: { type: Number, default: 1 },
   },
   { collection: "sessions" },
 );
+SessionSchema.index({ lastSeenAt: 1 }, { expireAfterSeconds: 395 * 24 * 60 * 60 });
 
 const ExperimentConfigSchema = new mongoose.Schema(
   {
@@ -126,6 +133,8 @@ const AccountSchema = new mongoose.Schema(
     },
     seats: { type: Number, default: 1 },
     communityRole: { type: String, enum: ["student", "specialist", "admin"], default: "student" },
+    termsAcceptedAt: Date,
+    privacyNoticeVersion: String,
     createdAt: { type: Date, default: Date.now, index: true },
   },
   { collection: "app_accounts" },
@@ -139,6 +148,7 @@ const AppSessionSchema = new mongoose.Schema(
   },
   { collection: "app_sessions" },
 );
+AppSessionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 const BillingSettingsSchema = new mongoose.Schema(
   {
@@ -180,6 +190,7 @@ const InvoiceSchema = new mongoose.Schema(
     dueAt: Date,
     paidAt: { type: Date, index: true },
     grantAccessOnPay: { type: Boolean, default: false },
+    kind: { type: String, enum: ["sale", "complimentary"], default: "sale", index: true },
     razorpayPaymentLinkId: { type: String, index: true, sparse: true },
     paymentUrl: String,
     razorpayPaymentId: String,
@@ -221,26 +232,34 @@ const AssessmentRunSchema = new mongoose.Schema(
     assessmentId: { type: String, index: true },
     answers: { type: Object, default: {} },
     score: Number,
+    consentedAt: Date,
+    noticeVersion: String,
     createdAt: { type: Date, default: Date.now, index: true },
   },
   { collection: "app_assessment_runs" },
 );
 
-export const EventModel = mongoose.models.Event || mongoose.model("Event", EventSchema);
-export const LeadModel = mongoose.models.Lead || mongoose.model("Lead", LeadSchema);
-export const VisitorModel = mongoose.models.Visitor || mongoose.model("Visitor", VisitorSchema);
-export const SessionModel = mongoose.models.Session || mongoose.model("Session", SessionSchema);
-export const ExperimentConfigModel =
-  mongoose.models.ExperimentConfig || mongoose.model("ExperimentConfig", ExperimentConfigSchema);
-export const AccountModel = mongoose.models.AppAccount || mongoose.model("AppAccount", AccountSchema);
-export const AppSessionModel =
-  mongoose.models.AppSession || mongoose.model("AppSession", AppSessionSchema);
-export const BillingSettingsModel =
-  mongoose.models.BillingSettings || mongoose.model("BillingSettings", BillingSettingsSchema);
-export const ThreadModel = mongoose.models.AppThread || mongoose.model("AppThread", ThreadSchema);
-export const AssessmentRunModel =
-  mongoose.models.AppAssessmentRun || mongoose.model("AppAssessmentRun", AssessmentRunSchema);
-export const InvoiceModel = mongoose.models.Invoice || mongoose.model("Invoice", InvoiceSchema);
+type LooseMongoModel = mongoose.Model<Record<string, unknown>>;
+
+export const EventModel = (mongoose.models.Event || mongoose.model("Event", EventSchema)) as LooseMongoModel;
+export const LeadModel = (mongoose.models.Lead || mongoose.model("Lead", LeadSchema)) as LooseMongoModel;
+export const VisitorModel = (mongoose.models.Visitor || mongoose.model("Visitor", VisitorSchema)) as LooseMongoModel;
+export const SessionModel = (mongoose.models.Session || mongoose.model("Session", SessionSchema)) as LooseMongoModel;
+export const ExperimentConfigModel = (
+  mongoose.models.ExperimentConfig || mongoose.model("ExperimentConfig", ExperimentConfigSchema)
+) as LooseMongoModel;
+export const AccountModel = (mongoose.models.AppAccount || mongoose.model("AppAccount", AccountSchema)) as LooseMongoModel;
+export const AppSessionModel = (
+  mongoose.models.AppSession || mongoose.model("AppSession", AppSessionSchema)
+) as LooseMongoModel;
+export const BillingSettingsModel = (
+  mongoose.models.BillingSettings || mongoose.model("BillingSettings", BillingSettingsSchema)
+) as LooseMongoModel;
+export const ThreadModel = (mongoose.models.AppThread || mongoose.model("AppThread", ThreadSchema)) as LooseMongoModel;
+export const AssessmentRunModel = (
+  mongoose.models.AppAssessmentRun || mongoose.model("AppAssessmentRun", AssessmentRunSchema)
+) as LooseMongoModel;
+export const InvoiceModel = (mongoose.models.Invoice || mongoose.model("Invoice", InvoiceSchema)) as LooseMongoModel;
 
 export async function connectMongo(uri: string): Promise<void> {
   if (mongoose.connection.readyState === 1) return;
@@ -249,6 +268,11 @@ export async function connectMongo(uri: string): Promise<void> {
 
 export async function ensureMongoIndexes(): Promise<void> {
   if (mongoose.connection.readyState !== 1) return;
+  await migrateTtlIndex(EventModel, "at", 395 * 24 * 60 * 60);
+  await migrateTtlIndex(LeadModel, "createdAt", 365 * 24 * 60 * 60);
+  await migrateTtlIndex(VisitorModel, "lastSeenAt", 395 * 24 * 60 * 60);
+  await migrateTtlIndex(SessionModel, "lastSeenAt", 395 * 24 * 60 * 60);
+  await migrateTtlIndex(AppSessionModel, "createdAt", 30 * 24 * 60 * 60);
   await Promise.all([
     EventModel.syncIndexes(),
     LeadModel.syncIndexes(),
@@ -262,6 +286,39 @@ export async function ensureMongoIndexes(): Promise<void> {
     AssessmentRunModel.syncIndexes(),
     InvoiceModel.syncIndexes(),
   ]);
+}
+
+async function migrateTtlIndex(
+  model: LooseMongoModel,
+  field: string,
+  expireAfterSeconds: number,
+): Promise<void> {
+  let indexes: Awaited<ReturnType<typeof model.collection.indexes>>;
+  try {
+    indexes = await model.collection.indexes();
+  } catch (error) {
+    if (mongoErrorCode(error) === 26) return;
+    throw error;
+  }
+
+  const existing = indexes.find((index) => {
+    const key = index.key as Record<string, unknown> | undefined;
+    return key && Object.keys(key).length === 1 && key[field] === 1;
+  });
+  if (!existing || Number(existing.expireAfterSeconds) === expireAfterSeconds) return;
+  if (!existing.name || existing.name === "_id_") return;
+
+  try {
+    await model.collection.dropIndex(existing.name);
+  } catch (error) {
+    if (mongoErrorCode(error) !== 27) throw error;
+  }
+}
+
+function mongoErrorCode(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  const code = Number((error as { code?: unknown }).code);
+  return Number.isFinite(code) ? code : null;
 }
 
 export function mongoReady(): boolean {
@@ -287,7 +344,7 @@ export const mongoEventStore: EventStore = {
     return rows.map((row) => ({
       ...row,
       at: new Date(row.at as Date),
-    })) as StoredAnalyticsEvent[];
+    })) as unknown as StoredAnalyticsEvent[];
   },
 };
 
@@ -310,6 +367,9 @@ export const mongoLeadStore: LeadStore = {
       sizeBand: (row.sizeBand as StoredLead["sizeBand"]) ?? null,
       preferredTime: (row.preferredTime as string | null) ?? null,
       visitorId: (row.visitorId as string | null) ?? null,
+      consentedAt: new Date((row.consentedAt as Date) || row.createdAt || Date.now()),
+      adultConfirmedAt: new Date((row.adultConfirmedAt as Date) || row.createdAt || Date.now()),
+      privacyNoticeVersion: (row.privacyNoticeVersion as string) || "legacy",
       createdAt: new Date(row.createdAt as Date),
     }));
   },
@@ -440,6 +500,8 @@ function mapAccount(row: Record<string, unknown>): AccountRecord {
     seats: Number(row.seats || 1),
     communityRole:
       row.communityRole === "specialist" || row.communityRole === "admin" ? row.communityRole : "student",
+    termsAcceptedAt: row.termsAcceptedAt ? new Date(row.termsAcceptedAt as Date) : null,
+    privacyNoticeVersion: (row.privacyNoticeVersion as string | null) ?? null,
     createdAt: new Date((row.createdAt as Date) || Date.now()),
   };
 }
@@ -465,6 +527,9 @@ export const mongoAccountStore: AccountStore = {
     await AccountModel.findOneAndUpdate({ id: account.id }, account, { upsert: true, new: true });
     return account;
   },
+  async delete(id) {
+    await AccountModel.deleteOne({ id });
+  },
 };
 
 export const mongoAppSessionStore: AppSessionStore = {
@@ -472,7 +537,8 @@ export const mongoAppSessionStore: AppSessionStore = {
     await AppSessionModel.create(session);
   },
   async get(token: string) {
-    const row = await AppSessionModel.findOne({ token }).lean();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const row = await AppSessionModel.findOne({ token, createdAt: { $gt: cutoff } }).lean();
     if (!row) return null;
     return {
       token: row.token as string,
@@ -482,6 +548,9 @@ export const mongoAppSessionStore: AppSessionStore = {
   },
   async delete(token: string) {
     await AppSessionModel.deleteOne({ token });
+  },
+  async deleteByAccount(accountId: string) {
+    await AppSessionModel.deleteMany({ accountId });
   },
 };
 
@@ -576,6 +645,32 @@ export const mongoThreadStore: ThreadStore = {
     await thread.save();
     return mapThread(thread.toObject() as Record<string, unknown>);
   },
+  async anonymizeByAccount(accountId) {
+    await ThreadModel.updateMany(
+      { authorId: accountId },
+      { $set: { authorId: "deleted", authorName: "Former member" } },
+    );
+    const rows = await ThreadModel.find({
+      $or: [{ "answers.authorId": accountId }, { "answers.upvotedBy": accountId }],
+    });
+    for (const row of rows) {
+      const answers = (row.answers || []) as Array<{
+        authorId: string;
+        authorName: string;
+        upvotedBy: string[];
+        upvotes: number;
+      }>;
+      for (const answer of answers) {
+        if (answer.authorId === accountId) {
+          answer.authorId = "deleted";
+          answer.authorName = "Former member";
+        }
+        answer.upvotedBy = (answer.upvotedBy || []).filter((id) => id !== accountId);
+        answer.upvotes = answer.upvotedBy.length;
+      }
+      await row.save();
+    }
+  },
 };
 
 function mapRun(row: Record<string, unknown>): AssessmentRun {
@@ -585,6 +680,8 @@ function mapRun(row: Record<string, unknown>): AssessmentRun {
     assessmentId: row.assessmentId as string,
     answers: (row.answers as Record<string, unknown>) || {},
     score: Number(row.score || 0),
+    consentedAt: new Date((row.consentedAt as Date) || row.createdAt || Date.now()),
+    noticeVersion: (row.noticeVersion as string) || "legacy",
     createdAt: new Date((row.createdAt as Date) || Date.now()),
   };
 }
@@ -594,6 +691,10 @@ export const mongoAssessmentRunStore: AssessmentRunStore = {
     await AssessmentRunModel.create(run);
     return run;
   },
+  async get(id) {
+    const row = await AssessmentRunModel.findOne({ id }).lean();
+    return row ? mapRun(row as Record<string, unknown>) : null;
+  },
   async listByAccount(accountId) {
     const rows = await AssessmentRunModel.find({ accountId }).sort({ createdAt: -1 }).lean();
     return rows.map((row) => mapRun(row as Record<string, unknown>));
@@ -601,6 +702,9 @@ export const mongoAssessmentRunStore: AssessmentRunStore = {
   async list() {
     const rows = await AssessmentRunModel.find().sort({ createdAt: -1 }).lean();
     return rows.map((row) => mapRun(row as Record<string, unknown>));
+  },
+  async deleteByAccount(accountId) {
+    await AssessmentRunModel.deleteMany({ accountId });
   },
 };
 
@@ -627,6 +731,7 @@ function mapInvoice(row: Record<string, unknown>): Invoice {
     dueAt: row.dueAt ? new Date(row.dueAt as Date) : null,
     paidAt: row.paidAt ? new Date(row.paidAt as Date) : null,
     grantAccessOnPay: Boolean(row.grantAccessOnPay),
+    kind: row.kind === "complimentary" ? "complimentary" : "sale",
     razorpayPaymentLinkId: (row.razorpayPaymentLinkId as string) || null,
     paymentUrl: (row.paymentUrl as string) || null,
     razorpayPaymentId: (row.razorpayPaymentId as string) || null,

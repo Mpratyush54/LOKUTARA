@@ -13,6 +13,8 @@ export type LeadInput = {
   organisation?: string;
   sizeBand?: string;
   preferredTime?: string;
+  privacyAccepted?: boolean;
+  adultConfirmed?: boolean;
 };
 
 export type ValidLead = {
@@ -37,6 +39,8 @@ export function validateLead(input: LeadInput): { ok: true; value: ValidLead } |
   if (name.length < 2) errors.push("name is required");
   if (!EMAIL_RE.test(email)) errors.push("email is invalid");
   if (phone.length < 8) errors.push("phone is required");
+  if (input.privacyAccepted !== true) errors.push("privacy notice acknowledgement is required");
+  if (input.adultConfirmed !== true) errors.push("adult confirmation is required");
 
   let sizeBand: SizeBand | null = null;
   if (input.sizeBand) {

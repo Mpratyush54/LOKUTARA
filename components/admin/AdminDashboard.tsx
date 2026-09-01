@@ -59,7 +59,7 @@ type OverviewPayload = {
   recent: {
     leads: AdminLead[];
     people: AccountRow[];
-    runs: Array<{ id: string; accountName: string; assessmentId: string; score: number; createdAt: string }>;
+    runs: Array<{ id: string; assessmentId: string; createdAt: string }>;
     threads: Array<{
       id: string;
       title: string;
@@ -136,7 +136,7 @@ export function AdminDashboard() {
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [leads, setLeads] = useState<AdminLead[] | null>(null);
   const [workspace, setWorkspace] = useState<{
-    runs: Array<{ id: string; accountName: string; assessmentId: string; score: number; createdAt: string }>;
+    runs: Array<{ id: string; assessmentId: string; createdAt: string }>;
     threads: Array<{ id: string; title: string; authorName: string; tags: string[]; views: number; answerCount: number }>;
   } | null>(null);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
@@ -519,7 +519,7 @@ export function AdminDashboard() {
                   {overview.accounts.expired > 0 ? (
                     <button type="button" className="admin-flag" onClick={() => setTab("trials")}>
                       <strong>{fmt(overview.accounts.expired)} expired</strong>
-                      <span>Restore trial or paid access on People.</span>
+                      <span>Restore trial or give complimentary access on People.</span>
                     </button>
                   ) : null}
                   {overview.accounts.none > 0 ? (
@@ -623,8 +623,7 @@ export function AdminDashboard() {
                   items={recentRuns.map((run) => ({
                     key: run.id,
                     title: assessmentTitle(run.assessmentId),
-                    meta: `${run.accountName} · ${when(run.createdAt)}`,
-                    bar: run.score,
+                    meta: `Participant result private · ${when(run.createdAt)}`,
                   }))}
                 />
                 <ActivityList
@@ -723,18 +722,16 @@ export function AdminDashboard() {
                 <thead>
                   <tr>
                     <th>When</th>
-                    <th>Person</th>
                     <th>Assessment</th>
-                    <th>Score</th>
+                    <th>Privacy</th>
                   </tr>
                 </thead>
                 <tbody>
                   {workspace.runs.map((run) => (
                     <tr key={run.id}>
                       <td className="meta">{when(run.createdAt)}</td>
-                      <td>{run.accountName}</td>
                       <td>{assessmentTitle(run.assessmentId)}</td>
-                      <td className="num">{run.score}</td>
+                      <td className="meta">Individual result withheld</td>
                     </tr>
                   ))}
                 </tbody>
@@ -789,7 +786,9 @@ export function AdminDashboard() {
               <div className="admin-card-head">
                 <h2 className="admin-h2">People ({accounts.length})</h2>
               </div>
-              <p className="lead admin-hint">Grant trial or paid access, or revoke the app.</p>
+              <p className="lead admin-hint">
+                Grant a trial, give complimentary access (₹0, Given by Admin, not revenue), or revoke the app. Paid checkout still goes through Razorpay.
+              </p>
               <div className="trial-controls">
                 <label className="admin-toggle">
                   <input
@@ -896,7 +895,7 @@ export function AdminDashboard() {
                             Trial
                           </button>
                           <button type="button" className="btn btn-secondary" onClick={() => void setAccess(row.id, "paid")}>
-                            Paid
+                            Give access
                           </button>
                           <button type="button" className="btn btn-ghost" onClick={() => void setAccess(row.id, "revoke")}>
                             Revoke

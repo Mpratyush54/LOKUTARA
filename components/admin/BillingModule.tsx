@@ -30,6 +30,10 @@ export type PresentedInvoice = {
   status: string;
   paymentUrl: string | null;
   grantAccessOnPay: boolean;
+  kind?: "sale" | "complimentary";
+  sourceLabel?: string;
+  documentTitle?: string;
+  countsTowardRevenue?: boolean;
   dueAt: string | null;
   paidAt: string | null;
   createdAt: string;
@@ -84,12 +88,13 @@ export function BillingModule({
   const [unitRupees, setUnitRupees] = useState(String(INVOICE_SKUS.find((item) => item.sku === "workshop")!.unitAmountPaise / 100));
   const [gstRate, setGstRate] = useState(18);
   const [grantAccess, setGrantAccess] = useState(false);
+  const [complimentary, setComplimentary] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const selected = catalog.find((item) => item.sku === sku) ?? catalog[0];
   const preview = useMemo(
-    () => invoiceTotals(rupeesToPaise(Number(unitRupees) || 0), qty, gstRate),
-    [unitRupees, qty, gstRate],
+    () => (complimentary ? invoiceTotals(0, qty, 0) : invoiceTotals(rupeesToPaise(Number(unitRupees) || 0), qty, gstRate)),
+    [complimentary, unitRupees, qty, gstRate],
   );
 
   async function load() {
@@ -135,21 +140,35 @@ export function BillingModule({
     ev.preventDefault();
     setBusy(true);
     setError(null);
+    if (complimentary && !accountId) {
+      setBusy(false);
+      setError("Choose an existing person to give complimentary access");
+      return;
+    }
     const { res, body } = await fetchJson("/api/admin/invoices", {
       method: "POST",
-      body: JSON.stringify({
-        accountId: accountId || undefined,
-        name,
-        email,
-        phone,
-        organisation,
-        sku,
-        qty,
-        unitAmountRupees: Number(unitRupees),
-        gstRate,
-        grantAccessOnPay: grantAccess,
-        issue,
-      }),
+      body: JSON.stringify(
+        complimentary
+          ? {
+              accountId,
+              sku,
+              complimentary: true,
+              label: `${selected.label} · Given by Admin`,
+            }
+          : {
+              accountId: accountId || undefined,
+              name,
+              email,
+              phone,
+              organisation,
+              sku,
+              qty,
+              unitAmountRupees: Number(unitRupees),
+              gstRate,
+              grantAccessOnPay: grantAccess,
+              issue,
+            },
+      ),
     });
     setBusy(false);
     if (!res.ok) {
@@ -208,15 +227,21 @@ export function BillingModule({
         </div>
         <article className="admin-bill">
           <header>
-            <p className="eyebrow">Tax invoice</p>
+            <p className="eyebrow">{printInvoice.documentTitle || "Tax invoice"}</p>
             <h2>{settings.legalName || "Lokutara"}</h2>
             {settings.address ? <p className="meta">{settings.address}</p> : null}
-            {settings.gstin ? <p className="meta">GSTIN {settings.gstin}</p> : null}
+            {settings.gstin && printInvoice.kind !== "complimentary" ? <p className="meta">GSTIN {settings.gstin}</p> : null}
           </header>
           <p>
             <strong>{printInvoice.number}</strong>
             <span className="meta"> · {printInvoice.status}</span>
           </p>
+          {printInvoice.kind === "complimentary" ? (
+            <p className="admin-flag" role="note">
+              <strong>{printInvoice.sourceLabel || "Given by Admin"}</strong>
+              <span>₹0 complimentary record. Not a tax invoice and not counted as revenue.</span>
+            </p>
+          ) : null}
           <p>
             Bill to {printInvoice.customerName}
             <br />
@@ -236,12 +261,14 @@ export function BillingModule({
               <tr>
                 <td>{printInvoice.label}</td>
                 <td>{printInvoice.qty}</td>
-                <td className="num">{formatInrFromPaise(printInvoice.subtotalPaise)}</td>
+                <td className="num">{printInvoice.kind === "complimentary" ? "₹0" : formatInrFromPaise(printInvoice.subtotalPaise)}</td>
               </tr>
-              <tr>
-                <td colSpan={2}>GST {printInvoice.gstRate}%</td>
-                <td className="num">{formatInrFromPaise(printInvoice.gstPaise)}</td>
-              </tr>
+              {printInvoice.kind === "complimentary" ? null : (
+                <tr>
+                  <td colSpan={2}>GST {printInvoice.gstRate}%</td>
+                  <td className="num">{formatInrFromPaise(printInvoice.gstPaise)}</td>
+                </tr>
+              )}
               <tr>
                 <td colSpan={2}>
                   <strong>Total</strong>
@@ -252,6 +279,7 @@ export function BillingModule({
               </tr>
             </tbody>
           </table>
+          {printInvoice.notes ? <p className="meta">{printInvoice.notes}</p> : null}
         </article>
       </section>
     );
@@ -263,8 +291,8 @@ export function BillingModule({
         <h2 className="admin-h2">Billing</h2>
       </div>
       <p className="lead admin-hint">
-        Issue a Lokutara bill from the workshop catalogue. Razorpay sends the payment link when keys are set; otherwise record
-        NEFT or cash.
+        Issue a Lokutara bill from the workshop catalogue. Razorpay sends the payment link when keys are set. Complimentary
+        grants are ₹0, labelled Given by Admin, skip Razorpay, and stay out of revenue.
       </p>
       {!razorpayConfigured ? (
         <p className="admin-flag" role="status">
@@ -292,7 +320,12 @@ export function BillingModule({
         <div className="form-grid">
           <label className="admin-field">
             <span className="meta">Existing person</span>
-            <select className="input" value={accountId} onChange={(e) => pickAccount(e.target.value)}>
+            <select
+              className="input"
+              value={accountId}
+              required={complimentary}
+              onChange={(e) => pickAccount(e.target.value)}
+            >
               <option value="">New customer</option>
               {(accounts || []).map((account) => (
                 <option key={account.id} value={account.id}>
@@ -303,11 +336,11 @@ export function BillingModule({
           </label>
           <label className="admin-field">
             <span className="meta">Name</span>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required={!complimentary} />
           </label>
           <label className="admin-field">
             <span className="meta">Email</span>
-            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required={!complimentary} />
           </label>
           <label className="admin-field">
             <span className="meta">Phone</span>
@@ -323,27 +356,63 @@ export function BillingModule({
           </label>
           <label className="admin-field">
             <span className="meta">Unit ₹ (ex-GST)</span>
-            <input className="input" type="number" min={1} value={unitRupees} onChange={(e) => setUnitRupees(e.target.value)} />
+            <input
+              className="input"
+              type="number"
+              min={complimentary ? 0 : 1}
+              value={complimentary ? "0" : unitRupees}
+              disabled={complimentary}
+              onChange={(e) => setUnitRupees(e.target.value)}
+            />
           </label>
           <label className="admin-field">
             <span className="meta">GST %</span>
-            <input className="input" type="number" min={0} max={40} value={gstRate} onChange={(e) => setGstRate(Number(e.target.value))} />
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={40}
+              value={complimentary ? 0 : gstRate}
+              disabled={complimentary}
+              onChange={(e) => setGstRate(Number(e.target.value))}
+            />
           </label>
         </div>
         <label className="admin-toggle">
-          <input type="checkbox" checked={grantAccess} onChange={(e) => setGrantAccess(e.target.checked)} />
-          <span>Grant app access when this bill is paid</span>
+          <input
+            type="checkbox"
+            checked={complimentary}
+            onChange={(e) => {
+              setComplimentary(e.target.checked);
+              if (e.target.checked) setGrantAccess(sku === "app_access");
+            }}
+          />
+          <span>Complimentary · Given by Admin (₹0, skip Razorpay, not revenue)</span>
         </label>
+        {complimentary ? null : (
+          <label className="admin-toggle">
+            <input type="checkbox" checked={grantAccess} onChange={(e) => setGrantAccess(e.target.checked)} />
+            <span>Grant app access when this bill is paid</span>
+          </label>
+        )}
         <p className="meta">
-          {selected.label} · GST {preview.gstRate}% · total {formatInrFromPaise(preview.totalPaise)}
+          {selected.label} · {complimentary ? "Given by Admin · ₹0 · not a sale" : `GST ${preview.gstRate}% · total ${formatInrFromPaise(preview.totalPaise)}`}
         </p>
         <div className="admin-top-actions">
-          <button type="submit" className="btn btn-primary" disabled={busy}>
-            Issue bill
-          </button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={(ev) => void onCreate(ev, false)}>
-            Save draft
-          </button>
+          {complimentary ? (
+            <button type="submit" className="btn btn-primary" disabled={busy}>
+              Give complimentary record
+            </button>
+          ) : (
+            <>
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                Issue bill
+              </button>
+              <button type="button" className="btn btn-secondary" disabled={busy} onClick={(ev) => void onCreate(ev, false)}>
+                Save draft
+              </button>
+            </>
+          )}
         </div>
       </form>
 
@@ -382,9 +451,15 @@ export function BillingModule({
                   <td className="num">{invoice.totalLabel}</td>
                   <td>
                     <span className="admin-pill">{invoice.status}</span>
+                    {invoice.kind === "complimentary" ? (
+                      <>
+                        <br />
+                        <span className="meta">{invoice.sourceLabel || "Given by Admin"}</span>
+                      </>
+                    ) : null}
                   </td>
                   <td className="admin-row-actions">
-                    {invoice.status === "draft" ? (
+                    {invoice.kind === "complimentary" ? null : invoice.status === "draft" ? (
                       <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void act(invoice.id, "issue")}>
                         Issue
                       </button>
@@ -394,16 +469,16 @@ export function BillingModule({
                         Copy link
                       </button>
                     ) : null}
-                    {invoice.status === "issued" || invoice.status === "overdue" || invoice.status === "draft" ? (
+                    {invoice.kind === "complimentary" ? null : invoice.status === "issued" || invoice.status === "overdue" || invoice.status === "draft" ? (
                       <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void act(invoice.id, "record-payment")}>
                         Record paid
                       </button>
                     ) : null}
-                    {invoice.status !== "paid" && invoice.status !== "cancelled" ? (
+                    {invoice.kind === "complimentary" || invoice.status === "paid" || invoice.status === "cancelled" ? null : (
                       <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void act(invoice.id, "cancel")}>
                         Cancel
                       </button>
-                    ) : null}
+                    )}
                     <button type="button" className="btn btn-ghost" onClick={() => setPrintInvoice(invoice)}>
                       Print
                     </button>

@@ -23,7 +23,7 @@ describe("AppHome", () => {
     expect(screen.getByTestId("home-skeleton")).toBeInTheDocument();
   });
 
-  it("renders overview stats and module cards once loaded", async () => {
+  it("renders a next-action brief, named scores, and community threads", async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -34,13 +34,17 @@ describe("AppHome", () => {
       }),
     } as Response);
     render(<AppHome />);
-    expect(await screen.findByRole("heading", { name: /hello/i })).toBeInTheDocument();
-    expect(screen.getByText("Screens taken")).toBeInTheDocument();
-    expect(screen.getByText("72")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Assessments" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /next: psychology inventory/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recent screens" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Community" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Account" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /open catalog/i })).toHaveAttribute("href", "/app/assessments");
+    expect(screen.getByText("Trait profile (OCEAN)")).toBeInTheDocument();
+    expect(screen.getByText("72")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Continue" })).toHaveAttribute("href", "/app/assessments/psychology");
+    expect(screen.getByRole("link", { name: /trait profile \(ocean\)/i })).toHaveAttribute(
+      "href",
+      "/app/assessments/runs/r1",
+    );
     expect(screen.getByText("How do we brief managers?")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByTestId("home-skeleton")).not.toBeInTheDocument());
   });
@@ -53,7 +57,7 @@ describe("AppHome", () => {
     } as Response);
     render(<AppHome />);
     expect(await screen.findByText(/no threads yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /start psychology/i })).toHaveAttribute("href", "/app/assessments/psychology");
-    expect(screen.getByRole("link", { name: /ask the community/i })).toHaveAttribute("href", "/app/community/ask");
+    expect(screen.getByRole("link", { name: "Start now" })).toHaveAttribute("href", "/app/assessments/psychology");
+    expect(screen.getByRole("link", { name: "Ask a question" })).toHaveAttribute("href", "/app/community/ask");
   });
 });

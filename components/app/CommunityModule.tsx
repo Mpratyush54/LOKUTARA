@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { CommunityRole } from "@/lib/access/billing";
-import { COMMUNITY_REPLY_RULES, COMMUNITY_TAG_GROUPS, COMMUNITY_TAGS, relativeDay } from "@/lib/product/workspace";
+import { COMMUNITY_TAG_GROUPS, COMMUNITY_TAGS, relativeDay } from "@/lib/product/workspace";
 import { jsonFetch, useAppAccount } from "./AppShell";
+import { showAppToast } from "./AppToast";
+import { GRIEVANCE_EMAIL } from "@/lib/legal/compliance";
 
 export type ThreadView = {
   id: string;
@@ -28,7 +30,6 @@ export type ThreadView = {
 export type ReplyPolicy = {
   role: CommunityRole;
   canReply: boolean;
-  rules: typeof COMMUNITY_REPLY_RULES;
 };
 
 function QuestionCard({ thread }: { thread: ThreadView }) {
@@ -38,13 +39,15 @@ function QuestionCard({ thread }: { thread: ThreadView }) {
       <div className="question-card-main">
         <h2>{thread.title}</h2>
         <p>{thread.body.slice(0, 180)}</p>
-        <div className="tag-row">
-          {thread.tags.map((tag) => (
-            <span key={tag} className="tag">
-              {tag}
-            </span>
-          ))}
-        </div>
+        {thread.tags.length ? (
+          <div className="tag-row">
+            {thread.tags.map((tag) => (
+              <span key={tag} className="tag tag-static">
+                {tag}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <p className="meta">
           {thread.authorName} · {relativeDay(thread.createdAt)}
         </p>
@@ -64,47 +67,8 @@ function QuestionCard({ thread }: { thread: ThreadView }) {
   );
 }
 
-export function CommunityRules({
-  role,
-  compact,
-}: {
-  role?: CommunityRole;
-  compact?: boolean;
-}) {
-  return (
-    <aside className={`community-rules${compact ? " is-compact" : ""}`} aria-labelledby="reply-rules-title">
-      <div className="community-rules-head">
-        <h2 id="reply-rules-title">Who can reply</h2>
-        {role ? (
-          <p className="meta">
-            Your role: <strong>{role}</strong>
-          </p>
-        ) : null}
-      </div>
-      <ul>
-        {COMMUNITY_REPLY_RULES.map((rule) => (
-          <li key={rule.who} className={rule.canReply ? "is-allowed" : "is-blocked"}>
-            <span className={rule.canReply ? "status-pill is-answered" : "status-pill is-pending"}>
-              {rule.canReply ? "Can answer" : "Cannot answer"}
-            </span>
-            <div>
-              <strong>{rule.who}</strong>
-              <p>{rule.detail}</p>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="meta">
-        Unanswered threads stay Pending until a specialist or admin replies. Answered threads stay open for further specialist replies. Students may ask and upvote, not answer.
-      </p>
-    </aside>
-  );
-}
-
 export function CommunityExplore() {
-  const account = useAppAccount();
   const [threads, setThreads] = useState<ThreadView[]>([]);
-  const [policy, setPolicy] = useState<ReplyPolicy | null>(null);
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("");
   const [sort, setSort] = useState<"latest" | "unanswered">("latest");
@@ -118,17 +82,18 @@ export function CommunityExplore() {
     params.set("sort", nextSort);
     const { res, body } = await jsonFetch(`/api/workspace/community?${params.toString()}`);
     if (res.status === 402) {
+      showAppToast("Community is not on your plan.");
       setError("Community is not on your plan.");
       setReady(true);
       return;
     }
     if (!res.ok) {
+      showAppToast(body.message || "Could not load threads. Try again in a moment.");
       setError(body.message || "Could not load threads");
       setReady(true);
       return;
     }
     setThreads(body.threads || []);
-    if (body.replyPolicy) setPolicy(body.replyPolicy as ReplyPolicy);
     setReady(true);
   }
 
@@ -137,7 +102,6 @@ export function CommunityExplore() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (error) return <p className="app-error">{error}</p>;
   if (!ready) {
     return (
       <div className="module-stack" aria-busy="true">
@@ -148,25 +112,20 @@ export function CommunityExplore() {
     );
   }
 
-  const role = policy?.role ?? account?.communityRole ?? "student";
-
   return (
     <div className="module-stack">
-      <header className="community-head">
+      <header className="community-head dash-in">
         <div>
           <p className="eyebrow">Connect</p>
-          <h1>Explore</h1>
-          <p className="lead">
-            Search, tags, pending/answered — remapped from the Forum explore feed into this dashboard. Not a second site.
-          </p>
+          <h1>Community</h1>
+          <p className="lead">Ask about workshops, managers, and day-to-day work. Replies stay in this workspace.</p>
         </div>
         <Link className="btn btn-primary" href="/app/community/ask">
           Ask a question
         </Link>
       </header>
-      <CommunityRules role={role} />
       <form
-        className="community-filters"
+        className="community-filters dash-in delay-1"
         onSubmit={(ev) => {
           ev.preventDefault();
           void load();
@@ -174,6 +133,7 @@ export function CommunityExplore() {
       >
         <input
           type="search"
+          className="input"
           placeholder="Search questions"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -183,6 +143,7 @@ export function CommunityExplore() {
           Search
         </button>
         <select
+          className="input"
           value={sort}
           aria-label="Sort questions"
           onChange={(e) => {
@@ -195,12 +156,12 @@ export function CommunityExplore() {
           <option value="unanswered">Unanswered</option>
         </select>
       </form>
-      <div className="tag-row">
+      <div className="tag-row dash-in delay-1">
         {COMMUNITY_TAGS.map((item) => (
           <button
             key={item}
             type="button"
-            className={tag === item ? "tag is-on" : "tag"}
+            className={tag === item ? "tag tag-btn is-on" : "tag tag-btn"}
             onClick={() => {
               const next = tag === item ? "" : item;
               setTag(next);
@@ -211,13 +172,15 @@ export function CommunityExplore() {
           </button>
         ))}
       </div>
-      {error ? <p className="app-error">{error}</p> : null}
-      {!threads.length ? (
+      {error && !threads.length ? (
+        <p className="lead">Community could not load. Refresh, or get in touch if this keeps happening.</p>
+      ) : null}
+      {!threads.length && !error ? (
         <p className="product-empty">No threads yet. Ask the first question for this workspace.</p>
       ) : (
         <ul className="thread-list">
-          {threads.map((thread) => (
-            <li key={thread.id}>
+          {threads.map((thread, i) => (
+            <li key={thread.id} className={`dash-in delay-${Math.min(i, 4) || 1}`}>
               <QuestionCard thread={thread} />
             </li>
           ))}
@@ -228,13 +191,16 @@ export function CommunityExplore() {
 }
 
 export function AskThread() {
-  const account = useAppAccount();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [noticeAccepted, setNoticeAccepted] = useState(false);
   const [saving, setSaving] = useState(false);
-  const valid = title.trim().length >= 10 && body.trim().length >= 20 && tags.length > 0;
+  const valid =
+    title.trim().length >= 10 &&
+    body.trim().length >= 20 &&
+    tags.length > 0 &&
+    noticeAccepted;
 
   function toggle(tag: string) {
     setTags((prev) => {
@@ -246,15 +212,23 @@ export function AskThread() {
 
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
-    if (!valid) return;
+    if (!valid) {
+      showAppToast("Add a title, a short description, and at least one topic.");
+      return;
+    }
     setSaving(true);
     const { res, body: payload } = await jsonFetch("/api/workspace/community", {
       method: "POST",
-      body: JSON.stringify({ title, body, tags }),
+      body: JSON.stringify({
+        title,
+        body,
+        tags,
+        communityNoticeAccepted: noticeAccepted,
+      }),
     });
     setSaving(false);
     if (!res.ok) {
-      setError(payload.message || "Could not post");
+      showAppToast(payload.message || "Could not post. Try again in a moment.");
       return;
     }
     window.location.href = `/app/community/${payload.thread.id}`;
@@ -264,11 +238,18 @@ export function AskThread() {
     <form className="module-stack ask-form" onSubmit={onSubmit}>
       <p className="eyebrow">Ask</p>
       <h1>Ask a question</h1>
-      <p className="lead">Get help from people in this workspace — same dashboard, not a second forum login.</p>
-      <CommunityRules role={account?.communityRole ?? "student"} compact />
+      <p className="lead">
+        Share enough context for a useful reply. This is a member forum, not confidential
+        counselling or an emergency channel.
+      </p>
+      <div className="safety-callout">
+        Do not post names, contact details, diagnoses, session content, confidential
+        employer information, or an identifiable story about another person.
+      </div>
       <label className="admin-field">
         <span className="meta">Question title</span>
         <input
+          className="input"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           required
@@ -279,6 +260,7 @@ export function AskThread() {
       <label className="admin-field">
         <span className="meta">Description</span>
         <textarea
+          className="input"
           value={body}
           onChange={(e) => setBody(e.target.value)}
           required
@@ -292,14 +274,31 @@ export function AskThread() {
           <p className="meta">{group}</p>
           <div className="tag-row">
             {COMMUNITY_TAG_GROUPS[group].map((tag) => (
-              <button key={tag} type="button" className={tags.includes(tag) ? "tag is-on" : "tag"} onClick={() => toggle(tag)}>
+              <button
+                key={tag}
+                type="button"
+                className={tags.includes(tag) ? "tag tag-btn is-on" : "tag tag-btn"}
+                onClick={() => toggle(tag)}
+              >
                 {tag}
               </button>
             ))}
           </div>
         </div>
       ))}
-      {error ? <p className="app-error">{error}</p> : null}
+      <p className="meta">{tags.length ? `${tags.length} topic${tags.length === 1 ? "" : "s"} selected` : "Select at least one topic"}</p>
+      <label className="legal-check">
+        <input
+          type="checkbox"
+          checked={noticeAccepted}
+          onChange={(event) => setNoticeAccepted(event.target.checked)}
+          required
+        />
+        <span>
+          I have removed personal and confidential details and accept the{" "}
+          <Link href="/terms">community rules</Link>.
+        </span>
+      </label>
       <div className="paywall-actions">
         <button type="submit" className="btn btn-primary" disabled={!valid || saving}>
           {saving ? "Posting…" : "Submit question"}
@@ -318,7 +317,7 @@ export function ThreadDetail({ id }: { id: string }) {
   const [policy, setPolicy] = useState<ReplyPolicy | null>(null);
   const [me, setMe] = useState<string | null>(null);
   const [reply, setReply] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const answers = useMemo(() => thread?.answers || [], [thread]);
@@ -331,7 +330,8 @@ export function ThreadDetail({ id }: { id: string }) {
         jsonFetch("/api/auth/me"),
       ]);
       if (!res.ok) {
-        setError(body.message || "Thread missing");
+        showAppToast(body.message || "This thread could not be opened.");
+        setMissing(true);
         return;
       }
       setThread(body.thread);
@@ -343,7 +343,7 @@ export function ThreadDetail({ id }: { id: string }) {
   async function sendReply(ev: FormEvent) {
     ev.preventDefault();
     if (reply.trim().length < 10) {
-      setError("Answer must be at least 10 characters.");
+      showAppToast("Answer must be at least 10 characters.");
       return;
     }
     setSubmitting(true);
@@ -353,12 +353,11 @@ export function ThreadDetail({ id }: { id: string }) {
     });
     setSubmitting(false);
     if (!res.ok) {
-      setError(body.message || "Could not reply");
+      showAppToast(body.message || "Could not reply. Try again in a moment.");
       return;
     }
     setThread(body.thread);
     setReply("");
-    setError(null);
   }
 
   async function upvote(answerId: string) {
@@ -368,7 +367,13 @@ export function ThreadDetail({ id }: { id: string }) {
     if (res.ok) setThread(body.thread);
   }
 
-  if (error && !thread) return <p className="app-error">{error}</p>;
+  if (missing && !thread) {
+    return (
+      <p className="lead">
+        This thread could not be opened. <Link href="/app/community">Back to community</Link>.
+      </p>
+    );
+  }
   if (!thread) return <p className="meta">Opening thread…</p>;
 
   const role = policy?.role ?? account?.communityRole ?? "student";
@@ -377,9 +382,9 @@ export function ThreadDetail({ id }: { id: string }) {
   return (
     <article className="module-stack thread-detail">
       <Link href="/app/community" className="btn btn-ghost">
-        Back to explore
+        Back to community
       </Link>
-      <div className="question-hero">
+      <div className="question-hero dash-in">
         <div className="question-hero-top">
           <h1>{thread.title}</h1>
           <span className={pending ? "status-pill is-pending" : "status-pill is-answered"}>
@@ -388,7 +393,7 @@ export function ThreadDetail({ id }: { id: string }) {
         </div>
         <div className="tag-row">
           {thread.tags.map((tag) => (
-            <span key={tag} className="tag is-on">
+            <span key={tag} className="tag tag-static is-on">
               {tag}
             </span>
           ))}
@@ -397,12 +402,17 @@ export function ThreadDetail({ id }: { id: string }) {
           {thread.authorName} · {relativeDay(thread.createdAt)} · {thread.views} views
         </p>
         <p className="thread-body">{thread.body}</p>
+        <a
+          className="meta"
+          href={`mailto:${GRIEVANCE_EMAIL}?subject=${encodeURIComponent(`Community report: ${thread.id}`)}`}
+        >
+          Report privacy, safety, or rule concern
+        </a>
       </div>
-      <CommunityRules role={role} />
-      <section className="answer-section">
+      <section className="answer-section dash-in delay-1">
         <h2 className="admin-h2">{answers.length} {answers.length === 1 ? "answer" : "answers"}</h2>
         {!answers.length ? (
-          <p className="answer-empty">No answers yet. Specialists and admins can be the first to reply.</p>
+          <p className="answer-empty">No answers yet.</p>
         ) : (
           <ul className="answer-list">
             {answers.map((answer) => {
@@ -433,13 +443,14 @@ export function ThreadDetail({ id }: { id: string }) {
           </ul>
         )}
       </section>
-      <section className="reply-panel">
+      <section className="reply-panel dash-in delay-2">
         <h2>Your answer</h2>
         {canReply ? (
           <form className="reply-composer" onSubmit={sendReply}>
             <label className="admin-field">
               <span className="meta">Write a reply</span>
               <textarea
+                className="input"
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
                 rows={6}
@@ -448,7 +459,6 @@ export function ThreadDetail({ id }: { id: string }) {
                 placeholder="Share a clear, useful answer…"
               />
             </label>
-            {error ? <p className="app-error">{error}</p> : null}
             <div className="reply-composer-actions">
               <button type="submit" className="btn btn-primary" disabled={submitting || reply.trim().length < 10}>
                 {submitting ? "Posting…" : "Post answer"}
@@ -456,11 +466,7 @@ export function ThreadDetail({ id }: { id: string }) {
             </div>
           </form>
         ) : (
-          <p className="reply-locked">
-            {role === "student"
-              ? "Only verified specialists and admins can answer. Students can ask questions and upvote — not post replies, even on their own thread."
-              : "Sign in with a specialist or admin role to post answers."}
-          </p>
+          <p className="reply-locked">You can ask questions and upvote. Specialists post answers.</p>
         )}
       </section>
     </article>

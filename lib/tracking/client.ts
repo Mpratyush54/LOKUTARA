@@ -78,6 +78,9 @@ export function writeClientConsent(consent: ConsentState) {
   const payload = JSON.stringify(consent);
   writeCookie(CONSENT_COOKIE, payload, 60 * 60 * 24 * 180);
   writeLocalConsent(consent);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("lokutara:consent", { detail: consent }));
+  }
 }
 
 export function ensureIdentity(now = Date.now()) {

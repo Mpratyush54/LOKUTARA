@@ -10,6 +10,8 @@ describe("validateLead", () => {
       phone: "9876543210",
       organisation: "Northstar",
       sizeBand: "50-500",
+      privacyAccepted: true,
+      adultConfirmed: true,
     });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.email).toBe("priya@startup.test");
@@ -27,6 +29,8 @@ describe("validateLead", () => {
       email: "arun@mail.test",
       phone: "9876543210",
       preferredTime: "Wed 2pm",
+      privacyAccepted: true,
+      adultConfirmed: true,
     });
     expect(result.ok).toBe(true);
   });

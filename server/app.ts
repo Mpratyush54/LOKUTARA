@@ -1,6 +1,5 @@
 import express, { type Express } from "express";
 import cookieParser from "cookie-parser";
-import cors from "cors";
 import { createEventsRouter } from "./routes/events";
 import { createLeadsRouter } from "./routes/leads";
 import { createStubRouter } from "./routes/stubs";
@@ -10,8 +9,9 @@ import { createAdminRouter } from "./routes/admin";
 import { createRazorpayWebhookRouter } from "./routes/webhooks";
 import { createExperimentsRouter } from "./routes/experiments";
 import { createAuthRouter } from "./routes/auth";
+import { createBillingRouter } from "./routes/billing";
 import { createWorkspaceRouter } from "./routes/workspace";
-import { apiNotFound, errorHandler } from "./middleware/errors";
+import { apiNotFound, errorHandler, HttpError } from "./middleware/errors";
 import { createMemoryStores } from "./stores/memory";
 import type {
   AccountStore,
@@ -75,7 +75,19 @@ export function createApiApp(deps: ApiDeps): Express {
   const assessmentRuns = deps.assessmentRuns ?? fallback.assessmentRunStore;
   const invoices = deps.invoices ?? fallback.invoiceStore;
 
-  app.use(cors({ origin: true, credentials: true }));
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader(
+      "Permissions-Policy",
+      "camera=(), microphone=(), geolocation=(), payment=(self)",
+    );
+    if (process.env.NODE_ENV === "production") {
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+    next();
+  });
   app.use(
     "/api/webhooks/razorpay",
     express.raw({ type: "*/*" }),
@@ -87,6 +99,28 @@ export function createApiApp(deps: ApiDeps): Express {
   );
   app.use(express.json({ limit: "32kb" }));
   app.use(cookieParser());
+  app.use((req, _res, next) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      next();
+      return;
+    }
+    const origin = req.get("origin");
+    if (!origin) {
+      next();
+      return;
+    }
+    const forwardedHost = req.get("x-forwarded-host")?.split(",")[0]?.trim();
+    const expectedHost = forwardedHost || req.get("host");
+    try {
+      if (new URL(origin).host === expectedHost) {
+        next();
+        return;
+      }
+    } catch {
+      // Rejected below.
+    }
+    next(new HttpError(403, "forbidden", "Cross-origin state-changing request rejected"));
+  });
 
   app.get("/api/health", async (_req, res, next) => {
     try {
@@ -135,7 +169,29 @@ export function createApiApp(deps: ApiDeps): Express {
   app.use("/api/events", createEventsRouter(deps));
   app.use("/api/leads", createLeadsRouter(deps));
   app.use("/api/experiments", createExperimentsRouter({ experiments: deps.experiments }));
-  app.use("/api/auth", createAuthRouter({ accounts, sessions: appSessions, billing }));
+  app.use(
+    "/api/auth",
+    createAuthRouter({
+      accounts,
+      sessions: appSessions,
+      billing,
+      assessmentRuns,
+      threads,
+      invoices,
+      rateLimiter: deps.rateLimiter,
+    }),
+  );
+  app.use(
+    "/api/billing",
+    createBillingRouter({
+      accounts,
+      sessions: appSessions,
+      billing,
+      invoices,
+      razorpay: deps.razorpay,
+      rateLimiter: deps.rateLimiter,
+    }),
+  );
   app.use(
     "/api/workspace",
     createWorkspaceRouter({ accounts, sessions: appSessions, threads, assessmentRuns }),
@@ -155,6 +211,7 @@ export function createApiApp(deps: ApiDeps): Express {
       assessmentRuns,
       invoices,
       razorpay: deps.razorpay,
+      rateLimiter: deps.rateLimiter,
     }),
   );
   app.use("/api/product", createProductRouter(deps.product ?? createProductUpstream({})));

@@ -13,6 +13,7 @@ import { computeExperimentStats } from "../../lib/tracking/experimentStats";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import {
   ADMIN_COOKIE,
+  adminSessionToken,
   emailsEqual,
   isAdminAuthorized,
   readAdminCredentials,
@@ -27,13 +28,14 @@ import type {
   ExperimentConfigStore,
   InvoiceStore,
   LeadStore,
+  RateLimiter,
   StoredExperimentConfig,
   StoredLead,
   ThreadStore,
 } from "../stores/memory";
 import { loadProductSnapshot } from "../../lib/product/snapshot";
 import { createProductUpstream, type ProductUpstream } from "../../lib/product/upstream";
-import { INVOICE_SKUS, isInvoiceSku } from "../../lib/billing/catalog";
+import { INVOICE_SKUS, isInvoiceSku, skuGrantsAccess } from "../../lib/billing/catalog";
 import { computeCommerce } from "../../lib/billing/commerce";
 import {
   DEFAULT_GST_RATE,
@@ -43,6 +45,8 @@ import {
   rupeesToPaise,
   type Invoice,
 } from "../../lib/billing/invoices";
+import { grantComplimentaryInvoice, requireAccountForComplimentary } from "../billing/complimentary";
+import { issueInvoice } from "../billing/issue";
 import { markInvoicePaid } from "../billing/settle";
 import type { RazorpayClient } from "../payments/razorpay";
 import {
@@ -136,6 +140,7 @@ export function createAdminRouter(deps: {
   assessmentRuns?: AssessmentRunStore;
   invoices?: InvoiceStore;
   razorpay?: RazorpayClient;
+  rateLimiter: RateLimiter;
 }): Router {
   const router = Router();
   const envCreds = readAdminCredentials();
@@ -169,6 +174,12 @@ export function createAdminRouter(deps: {
         );
       }
       const body = req.body || {};
+      const allowed = await deps.rateLimiter.allow(
+        `admin-login:${req.ip}`,
+        8,
+        15 * 60_000,
+      );
+      if (!allowed) throw new HttpError(429, "rate_limited", "Too many admin login attempts");
       const providedPassword =
         typeof body.password === "string"
           ? body.password.trim()
@@ -188,7 +199,7 @@ export function createAdminRouter(deps: {
       } else if (!providedPassword || !secretsEqual(providedPassword, password)) {
         throw new HttpError(401, "unauthorized", "Invalid admin password");
       }
-      res.cookie(ADMIN_COOKIE, password, {
+      res.cookie(ADMIN_COOKIE, adminSessionToken(password), {
         httpOnly: true,
         sameSite: "lax",
         secure: process.env.NODE_ENV === "production",
@@ -342,7 +353,6 @@ export function createAdminRouter(deps: {
       for (const account of accounts) {
         counts[resolveAccess(account).status] += 1;
       }
-      const names = new Map(accounts.map((account) => [account.id, account.name || account.email]));
       const commerce = computeCommerce({
         invoices,
         accounts,
@@ -369,9 +379,7 @@ export function createAdminRouter(deps: {
             .slice(0, 6)
             .map((run) => ({
               id: run.id,
-              accountName: names.get(run.accountId) || run.accountId,
               assessmentId: run.assessmentId,
-              score: run.score,
               createdAt: run.createdAt.toISOString(),
             })),
           threads: threads.slice(0, 6).map((thread) => ({
@@ -394,18 +402,13 @@ export function createAdminRouter(deps: {
     asyncHandler(async (_req, res) => {
       const runs = deps.assessmentRuns ? await deps.assessmentRuns.list() : [];
       const threads = deps.threads ? await deps.threads.list() : [];
-      const accounts = deps.accounts ? await deps.accounts.list() : [];
-      const names = new Map(accounts.map((account) => [account.id, account.name || account.email]));
       res.json({
         runs: runs
           .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
           .slice(0, 50)
           .map((run) => ({
             id: run.id,
-            accountId: run.accountId,
-            accountName: names.get(run.accountId) || run.accountId,
             assessmentId: run.assessmentId,
-            score: run.score,
             createdAt: run.createdAt.toISOString(),
           })),
         threads: threads.slice(0, 50).map((thread) => ({
@@ -488,7 +491,7 @@ export function createAdminRouter(deps: {
     gate,
     asyncHandler(async (req, res) => {
       if (!deps.accounts) throw new HttpError(503, "unavailable", "Account store is not configured");
-      const account = await deps.accounts.getById(req.params.id);
+      let account = await deps.accounts.getById(req.params.id);
       if (!account) throw new HttpError(404, "not_found", "Account not found");
       const body = req.body || {};
       const action = typeof body.action === "string" ? body.action : "";
@@ -540,7 +543,28 @@ export function createAdminRouter(deps: {
         account.seats = seats;
       }
       await deps.accounts.update(account);
-      res.json({ account: presentAccount(account) });
+      let complimentaryInvoice = null;
+      if (action === "paid" && deps.invoices) {
+        complimentaryInvoice = await grantComplimentaryInvoice({
+          account,
+          sku: "app_access",
+          invoices: deps.invoices,
+          accounts: deps.accounts,
+        });
+        const latest = await deps.accounts.getById(account.id);
+        if (latest) {
+          latest.plan = "paid";
+          latest.modules = account.modules;
+          latest.seats = account.seats;
+          latest.communityRole = account.communityRole;
+          await deps.accounts.update(latest);
+          account = latest;
+        }
+      }
+      res.json({
+        account: presentAccount(account),
+        invoice: complimentaryInvoice ? presentInvoice(complimentaryInvoice) : null,
+      });
     }),
   );
 
@@ -570,14 +594,32 @@ export function createAdminRouter(deps: {
     asyncHandler(async (req, res) => {
       if (!deps.invoices) throw new HttpError(503, "unavailable", "Invoice store is not configured");
       const settings = deps.billing ? await deps.billing.get() : DEFAULT_BILLING_SETTINGS;
-      const invoice = await buildInvoiceFromBody(req.body || {}, {
+      const body = (req.body || {}) as Record<string, unknown>;
+      if (body.complimentary) {
+        const skuRaw = typeof body.sku === "string" ? body.sku : "app_access";
+        if (!isInvoiceSku(skuRaw)) throw new HttpError(400, "invalid", "Choose a catalogue item");
+        if (!deps.accounts) throw new HttpError(503, "unavailable", "Account store is not configured");
+        const accountId = typeof body.accountId === "string" ? body.accountId : "";
+        const account = requireAccountForComplimentary(await deps.accounts.getById(accountId));
+        const invoice = await grantComplimentaryInvoice({
+          account,
+          sku: skuRaw,
+          invoices: deps.invoices,
+          accounts: deps.accounts,
+          label: typeof body.label === "string" ? body.label : undefined,
+          notes: typeof body.notes === "string" ? body.notes : undefined,
+        });
+        res.status(201).json({ invoice: presentInvoice(invoice) });
+        return;
+      }
+      const invoice = await buildInvoiceFromBody(body, {
         invoices: deps.invoices,
         accounts: deps.accounts,
         gstRate: settings.gstRate ?? DEFAULT_GST_RATE,
       });
       await deps.invoices.insert(invoice);
       let stored = invoice;
-      if (req.body?.issue) {
+      if (body.issue) {
         stored = await issueInvoice(stored, deps);
       }
       res.status(201).json({ invoice: presentInvoice(stored) });
@@ -639,41 +681,6 @@ async function requireInvoice(
   return invoice;
 }
 
-async function issueInvoice(
-  invoice: Invoice,
-  deps: { invoices?: InvoiceStore; razorpay?: RazorpayClient },
-): Promise<Invoice> {
-  if (!deps.invoices) throw new HttpError(503, "unavailable", "Invoice store is not configured");
-  if (invoice.status === "paid") throw new HttpError(409, "conflict", "Invoice is already paid");
-  if (invoice.status === "cancelled") throw new HttpError(409, "conflict", "Cancelled invoices cannot be issued");
-  let paymentUrl = invoice.paymentUrl;
-  let razorpayPaymentLinkId = invoice.razorpayPaymentLinkId;
-  if (deps.razorpay?.configured && !paymentUrl) {
-    const link = await deps.razorpay.createPaymentLink({
-      amountPaise: invoice.totalPaise,
-      invoiceId: invoice.id,
-      invoiceNumber: invoice.number,
-      description: `${invoice.number} · ${invoice.label}`,
-      customer: {
-        name: invoice.customerName,
-        email: invoice.customerEmail,
-        contact: invoice.customerPhone,
-      },
-    });
-    razorpayPaymentLinkId = link.id;
-    paymentUrl = link.shortUrl;
-  }
-  const next: Invoice = {
-    ...invoice,
-    status: "issued",
-    issuedAt: invoice.issuedAt ?? new Date(),
-    razorpayPaymentLinkId,
-    paymentUrl,
-  };
-  await deps.invoices.update(next);
-  return next;
-}
-
 async function buildInvoiceFromBody(
   body: Record<string, unknown>,
   deps: { invoices: InvoiceStore; accounts?: AccountStore; gstRate: number },
@@ -733,7 +740,8 @@ async function buildInvoiceFromBody(
     issuedAt: null,
     dueAt,
     paidAt: null,
-    grantAccessOnPay: Boolean(body.grantAccessOnPay),
+    grantAccessOnPay: body.grantAccessOnPay !== undefined ? Boolean(body.grantAccessOnPay) : skuGrantsAccess(skuRaw),
+    kind: "sale",
     razorpayPaymentLinkId: null,
     paymentUrl: null,
     razorpayPaymentId: null,

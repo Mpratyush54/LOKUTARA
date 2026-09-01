@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { invoiceTotals, lineFromSku, nextInvoiceNumber } from "./invoices";
+import { invoiceTotals, lineFromSku, nextInvoiceNumber, presentInvoice, type Invoice } from "./invoices";
 
 describe("invoice math", () => {
   it("applies 18% GST on a workshop line", () => {
@@ -25,5 +25,44 @@ describe("invoice math", () => {
     expect(nextInvoiceNumber(["LKT-26-0001", "LKT-26-0007"], new Date("2026-03-01T00:00:00.000Z"))).toBe(
       "LKT-26-0008",
     );
+  });
+});
+
+describe("presentInvoice", () => {
+  it("labels complimentary records as Given by Admin at ₹0", () => {
+    const invoice: Invoice = {
+      id: "inv_1",
+      number: "LKT-26-0001",
+      accountId: "acc_1",
+      customerName: "Asha",
+      customerEmail: "asha@lokutara.test",
+      customerPhone: null,
+      organisation: null,
+      sku: "app_access",
+      label: "Workspace · Given by Admin",
+      qty: 1,
+      unitAmountPaise: 0,
+      gstRate: 0,
+      subtotalPaise: 0,
+      gstPaise: 0,
+      totalPaise: 0,
+      currency: "INR",
+      status: "paid",
+      issuedAt: new Date("2026-08-31T00:00:00.000Z"),
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+      paidAt: new Date("2026-08-31T00:00:00.000Z"),
+      grantAccessOnPay: true,
+      kind: "complimentary",
+      razorpayPaymentLinkId: null,
+      paymentUrl: null,
+      razorpayPaymentId: "admin_grant",
+      notes: "Given by Admin",
+      createdAt: new Date("2026-08-31T00:00:00.000Z"),
+    };
+    const presented = presentInvoice(invoice);
+    expect(presented.totalLabel).toBe("₹0");
+    expect(presented.sourceLabel).toBe("Given by Admin");
+    expect(presented.documentTitle).toBe("Complimentary record");
+    expect(presented.countsTowardRevenue).toBe(false);
   });
 });

@@ -21,6 +21,8 @@ export const ALLOWED_EVENTS = [
   "chat_widget_message",
   "slider_change",
   "offering_open",
+  "pillar_select",
+  "booking_step_view",
   "scroll_depth",
 ] as const;
 

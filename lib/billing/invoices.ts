@@ -1,9 +1,13 @@
-import { skuCatalog, type InvoiceSku } from "./catalog";
+import { CUSTOMER_CHECKOUT_SKUS, skuCatalog, skuGrantsAccess, type CustomerCheckoutSku, type InvoiceSku } from "./catalog";
 import { toIstParts } from "./time";
 
 export const DEFAULT_GST_RATE = 18;
 
 export type InvoiceStatus = "draft" | "issued" | "paid" | "overdue" | "cancelled";
+export type InvoiceKind = "sale" | "complimentary";
+
+export const COMPLIMENTARY_PAYMENT_ID = "admin_grant";
+export const COMPLIMENTARY_NOTE = "Given by Admin. Complimentary. Not a sale and not counted as revenue.";
 
 export type Invoice = {
   id: string;
@@ -27,12 +31,30 @@ export type Invoice = {
   dueAt: Date | null;
   paidAt: Date | null;
   grantAccessOnPay: boolean;
+  kind: InvoiceKind;
   razorpayPaymentLinkId: string | null;
   paymentUrl: string | null;
   razorpayPaymentId: string | null;
   notes: string | null;
   createdAt: Date;
 };
+
+export function invoiceKindOf(invoice: Pick<Invoice, "kind"> | { kind?: InvoiceKind | null }): InvoiceKind {
+  return invoice.kind === "complimentary" ? "complimentary" : "sale";
+}
+
+export function isComplimentaryInvoice(invoice: Pick<Invoice, "kind"> | { kind?: InvoiceKind | null }): boolean {
+  return invoiceKindOf(invoice) === "complimentary";
+}
+
+export function countsTowardRevenue(invoice: Pick<Invoice, "kind" | "status" | "paidAt" | "totalPaise">): boolean {
+  return (
+    !isComplimentaryInvoice(invoice) &&
+    invoice.status === "paid" &&
+    Boolean(invoice.paidAt) &&
+    invoice.totalPaise > 0
+  );
+}
 
 export function rupeesToPaise(rupees: number): number {
   return Math.round(rupees * 100);
@@ -84,14 +106,48 @@ export function formatInrFromPaise(paise: number): string {
 }
 
 export function presentInvoice(invoice: Invoice, now = new Date()) {
+  const kind = invoiceKindOf(invoice);
+  const complimentary = kind === "complimentary";
   return {
     ...invoice,
+    kind,
     status: effectiveStatus(invoice, now),
     storedStatus: invoice.status,
     issuedAt: invoice.issuedAt?.toISOString() ?? null,
     dueAt: invoice.dueAt?.toISOString() ?? null,
     paidAt: invoice.paidAt?.toISOString() ?? null,
     createdAt: invoice.createdAt.toISOString(),
-    totalLabel: formatInrFromPaise(invoice.totalPaise),
+    totalLabel: complimentary ? "₹0" : formatInrFromPaise(invoice.totalPaise),
+    sourceLabel: complimentary ? "Given by Admin" : invoice.razorpayPaymentId ? "Razorpay" : invoice.paidAt ? "Recorded payment" : "Awaiting payment",
+    countsTowardRevenue: countsTowardRevenue({ ...invoice, kind }),
+    documentTitle: complimentary ? "Complimentary record" : "Tax invoice",
   };
+}
+
+const CUSTOMER_SKU_BLURBS: Record<CustomerCheckoutSku, string> = {
+  app_access: "Recommended if you want to keep assessments, reports, and community after the trial.",
+  counselling: "A 60-minute one-to-one session.",
+  virtual_session: "A 2-3 hour virtual session for a team.",
+  workshop: "A 2-3 hour workshop, scoped around the room you have.",
+  full_day: "A full day tailored for your group.",
+};
+
+export function presentCustomerCatalog(gstRate: number) {
+  return CUSTOMER_CHECKOUT_SKUS.map((sku) => {
+    const item = skuCatalog(sku);
+    const totals = invoiceTotals(item.unitAmountPaise, 1, gstRate);
+    return {
+      sku: item.sku,
+      label: item.label,
+      unitAmountPaise: item.unitAmountPaise,
+      gstRate: totals.gstRate,
+      subtotalPaise: totals.subtotalPaise,
+      gstPaise: totals.gstPaise,
+      totalPaise: totals.totalPaise,
+      totalLabel: formatInrFromPaise(totals.totalPaise),
+      grantAccess: skuGrantsAccess(item.sku),
+      recommended: sku === "app_access",
+      blurb: CUSTOMER_SKU_BLURBS[sku],
+    };
+  });
 }

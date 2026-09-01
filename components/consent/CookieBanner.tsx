@@ -7,10 +7,16 @@ import { hasDecided } from "@/lib/tracking/consent";
 type Props = {
   consent: ConsentState;
   onAcceptAll: () => void;
+  onAcceptAnalytics: () => void;
   onRejectOptional: () => void;
 };
 
-export function CookieBanner({ consent, onAcceptAll, onRejectOptional }: Props) {
+export function CookieBanner({
+  consent,
+  onAcceptAll,
+  onAcceptAnalytics,
+  onRejectOptional,
+}: Props) {
   if (hasDecided(consent)) return null;
 
   return (
@@ -32,6 +38,9 @@ export function CookieBanner({ consent, onAcceptAll, onRejectOptional }: Props) 
         <div className="cookie-actions">
           <button type="button" className="btn btn-secondary" onClick={onRejectOptional}>
             Necessary only
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onAcceptAnalytics}>
+            Analytics only
           </button>
           <button type="button" className="btn btn-primary" onClick={onAcceptAll}>
             Accept all

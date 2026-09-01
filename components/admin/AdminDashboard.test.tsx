@@ -220,6 +220,7 @@ describe("AdminDashboard", () => {
     const flag = await screen.findByRole("button", { name: /1 expired/i });
     fireEvent.click(flag);
     expect(await screen.findByText("Auto-start trial on signup")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Give access" })).toBeInTheDocument();
   });
 
   it("opens billing with the workshop catalogue", async () => {
@@ -246,5 +247,6 @@ describe("AdminDashboard", () => {
     expect(screen.getByRole("heading", { name: "New bill" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /2–3 hour workshop/i })).toBeInTheDocument();
     expect(screen.getByText(/razorpay is not configured/i)).toBeInTheDocument();
+    expect(screen.getByText(/Complimentary · Given by Admin/i)).toBeInTheDocument();
   });
 });

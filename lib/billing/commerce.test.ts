@@ -26,6 +26,7 @@ function paidInvoice(overrides: Partial<Invoice>): Invoice {
     dueAt: new Date("2026-08-20T00:00:00.000Z"),
     paidAt: new Date("2026-08-12T06:00:00.000Z"),
     grantAccessOnPay: false,
+    kind: "sale",
     razorpayPaymentLinkId: null,
     paymentUrl: null,
     razorpayPaymentId: null,
@@ -81,5 +82,48 @@ describe("computeCommerce", () => {
     expect(snapshot.paidThisMonth).toBe(1);
     expect(snapshot.series).toHaveLength(3);
     expect(snapshot.series.at(-1)?.date).toBe("2026-08-20");
+  });
+
+  it("excludes complimentary grants from revenue, outstanding, and paid-bill counts", () => {
+    const now = new Date("2026-08-20T08:00:00.000Z");
+    const snapshot = computeCommerce(
+      {
+        invoices: [
+          paidInvoice({ paidAt: new Date("2026-08-12T06:00:00.000Z"), totalPaise: 2_950_000 }),
+          paidInvoice({
+            id: "inv_comp",
+            sku: "app_access",
+            label: "Workspace · Given by Admin",
+            unitAmountPaise: 0,
+            subtotalPaise: 0,
+            gstPaise: 0,
+            totalPaise: 0,
+            kind: "complimentary",
+            grantAccessOnPay: true,
+            razorpayPaymentId: "admin_grant",
+            notes: "Given by Admin. Complimentary. Not a sale and not counted as revenue.",
+            paidAt: new Date("2026-08-18T06:00:00.000Z"),
+            createdAt: new Date("2026-08-18T06:00:00.000Z"),
+          }),
+          paidInvoice({
+            id: "inv_open",
+            status: "issued",
+            paidAt: null,
+            kind: "complimentary",
+            totalPaise: 0,
+            createdAt: new Date("2026-08-19T06:00:00.000Z"),
+          }),
+        ],
+        accounts: [],
+        events: [] as StoredAnalyticsEvent[],
+        leads: [],
+      },
+      now,
+      3,
+    );
+
+    expect(snapshot.revenueThisMonth).toBe(2_950_000);
+    expect(snapshot.outstandingPaise).toBe(0);
+    expect(snapshot.paidThisMonth).toBe(1);
   });
 });

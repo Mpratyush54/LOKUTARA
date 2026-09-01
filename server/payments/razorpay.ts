@@ -6,6 +6,7 @@ export type RazorpayPaymentLinkInput = {
   invoiceNumber: string;
   description: string;
   customer: { name: string; email: string; contact?: string | null };
+  callbackUrl?: string | null;
 };
 
 export type RazorpayClient = {
@@ -61,6 +62,9 @@ export function createRazorpayClient(opts: {
             invoiceId: input.invoiceId,
             invoiceNumber: input.invoiceNumber,
           },
+          ...(input.callbackUrl
+            ? { callback_url: input.callbackUrl, callback_method: "get" }
+            : {}),
         }),
       });
       const body = (await res.json().catch(() => ({}))) as {

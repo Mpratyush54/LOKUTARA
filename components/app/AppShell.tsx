@@ -4,11 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { AccessSnapshot } from "@/lib/access/billing";
+import { CheckoutButton } from "./CheckoutButton";
 
 export type AppAccount = {
   id: string;
   email: string;
   name: string;
+  phone?: string | null;
+  age?: number | null;
+  city?: string | null;
+  organisation?: string | null;
   seats: number;
   createdAt: string;
   access: AccessSnapshot;
@@ -16,10 +21,11 @@ export type AppAccount = {
 };
 
 const NAV = [
-  { href: "/app", label: "Home", match: (path: string) => path === "/app" },
+  { href: "/app", label: "Dashboard", match: (path: string) => path === "/app" },
   { href: "/app/assessments", label: "Assessments", match: (path: string) => path.startsWith("/app/assessments") },
   { href: "/app/community", label: "Community", match: (path: string) => path.startsWith("/app/community") },
-  { href: "/app/account", label: "Account", match: (path: string) => path.startsWith("/app/account") },
+  { href: "/app/billing", label: "Billing", match: (path: string) => path.startsWith("/app/billing") },
+  { href: "/app/account", label: "Profile", match: (path: string) => path.startsWith("/app/account") },
 ] as const;
 
 async function jsonFetch(path: string, init?: RequestInit) {
@@ -33,9 +39,14 @@ async function jsonFetch(path: string, init?: RequestInit) {
 }
 
 const AppAccountContext = createContext<AppAccount | null>(null);
+const AppAccountSetterContext = createContext<(account: AppAccount) => void>(() => {});
 
 export function useAppAccount() {
   return useContext(AppAccountContext);
+}
+
+export function useSetAppAccount() {
+  return useContext(AppAccountSetterContext);
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -108,12 +119,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!account.access.canEnterApp) {
+  if (!account.access.canEnterApp && pathname !== "/app/billing") {
     return (
       <div className="app-shell app-gate-wrap">
         <PaywallCard
           title={account.access.status === "expired" ? "Your trial has ended" : "Start a trial to open the dashboard"}
-          copy="One product, one paywall. Ask the founder to grant a trial or convert you to paid — modules stay inside this same dashboard."
+          copy={
+            account.access.status === "expired"
+              ? "Pay for 12 months of workspace access to keep assessments, reports, and community. You can pay here."
+              : "One product, one paywall. Start a trial from signup, or pay now for 12 months of access."
+          }
           status={account.access.status}
           email={account.email}
         />
@@ -122,12 +137,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
+    <AppAccountSetterContext.Provider value={setAccount}>
     <AppAccountContext.Provider value={account}>
       <div className="app-shell">
         <aside id="app-sidebar" className={`app-sidebar${menuOpen ? " is-open" : ""}`}>
           <div className="app-brand">
             <Link href="/app">Lokutara</Link>
-            <p className="meta">One product</p>
+            <p className="meta">Workspace</p>
           </div>
           <nav aria-label="Product">
             {NAV.map((item) => (
@@ -143,8 +159,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="app-sidebar-foot">
-            <p className="meta">{account.name}</p>
+            <p className="app-user-name">{account.name}</p>
             <p className="meta app-plan-pill">{account.access.status}</p>
+            <p className="meta">
+              <Link href="/privacy">Privacy</Link>
+              {" · "}
+              <Link href="/safeguards">Safeguards</Link>
+            </p>
             <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
               Sign out
             </button>
@@ -170,10 +191,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="meta app-plan-pill">{account.access.status}</span>
           </header>
           {menuOpen ? <button type="button" className="app-scrim" aria-label="Close menu" onClick={() => setMenuOpen(false)} /> : null}
+          {account.access.status === "trial" ? (
+            <UpgradeBanner daysLeft={account.access.daysLeft} />
+          ) : null}
           <div className="app-content">{children}</div>
         </div>
       </div>
     </AppAccountContext.Provider>
+    </AppAccountSetterContext.Provider>
   );
 }
 
@@ -195,17 +220,50 @@ export function PaywallCard({
       <p className="lead">{copy}</p>
       {email ? <p className="meta">Signed in as {email} · {status}</p> : null}
       <div className="paywall-actions">
-        <Link className="btn btn-primary" href="/signup">
-          Start free trial
-        </Link>
-        <Link className="btn btn-secondary" href="/login">
-          Sign in
-        </Link>
-        <a className="btn btn-ghost" href="/#contact">
-          Talk to founder
-        </a>
+        {email ? (
+          <>
+            <CheckoutButton sku="app_access">Upgrade now</CheckoutButton>
+            <Link className="btn btn-secondary" href="/app/billing">
+              See plans
+            </Link>
+            <a className="btn btn-ghost" href="/#contact">
+              Get in touch
+            </a>
+          </>
+        ) : (
+          <>
+            <Link className="btn btn-primary" href="/signup">
+              Start free trial
+            </Link>
+            <Link className="btn btn-secondary" href="/login">
+              Sign in
+            </Link>
+            <a className="btn btn-ghost" href="/#contact">
+              Get in touch
+            </a>
+          </>
+        )}
       </div>
     </section>
+  );
+}
+
+function UpgradeBanner({ daysLeft }: { daysLeft: number | null }) {
+  const days = daysLeft ?? 0;
+  const copy =
+    days <= 1
+      ? "Your trial ends today. Upgrade to keep assessments, reports, and community."
+      : `${days} days left on your trial. Upgrade to keep assessments, reports, and community after it ends.`;
+  return (
+    <div className="upgrade-banner" data-testid="upgrade-banner" role="status">
+      <p>{copy}</p>
+      <div className="upgrade-banner-actions">
+        <CheckoutButton sku="app_access">Upgrade now</CheckoutButton>
+        <Link className="btn btn-ghost" href="/app/billing">
+          See plans
+        </Link>
+      </div>
+    </div>
   );
 }
 

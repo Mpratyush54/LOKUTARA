@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { canPostCommunityAnswer, communityRoleOf } from "../../lib/access/billing";
-import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, scoreAssessment, type StoredAnswer } from "../../lib/product/workspace";
+import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, presentAssessmentRun, scoreAssessment, type StoredAnswer } from "../../lib/product/workspace";
+import { reportForRun } from "../../lib/product/report";
+import { buildAssessmentReportPdf } from "../../lib/product/reportPdf";
+import { ASSESSMENT_NOTICE_VERSION } from "../../lib/legal/compliance";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { requireAppAccess, requireModule, type AppRequest } from "../middleware/appAuth";
 import type { AccountStore, AppSessionStore, AssessmentRunStore, ThreadStore } from "../stores/memory";
@@ -54,12 +57,7 @@ export function createWorkspaceRouter(deps: {
       const runs = await deps.assessmentRuns.listByAccount(req.accountId!);
       const threads = await deps.threads.list();
       res.json({
-        runs: runs.slice(0, 5).map((run) => ({
-          id: run.id,
-          assessmentId: run.assessmentId,
-          score: run.score,
-          createdAt: run.createdAt.toISOString(),
-        })),
+        runs: runs.slice(0, 5).map(presentAssessmentRun),
         threadCount: threads.length,
         recentThreads: threads.slice(0, 4).map(presentThread),
       });
@@ -83,12 +81,55 @@ export function createWorkspaceRouter(deps: {
           recommended: item.recommended,
           kind: item.items.some((row) => row.kind === "rank") ? "rank" : "mcq",
         })),
-        runs: runs.map((run) => ({
-          id: run.id,
-          assessmentId: run.assessmentId,
-          score: run.score,
-          createdAt: run.createdAt.toISOString(),
-        })),
+        runs: runs.map(presentAssessmentRun),
+      });
+    }),
+  );
+
+  router.get(
+    "/assessments/runs/:runId/pdf",
+    requireModule("assessments"),
+    asyncHandler(async (req: AppRequest, res) => {
+      const run = await deps.assessmentRuns.get(req.params.runId);
+      if (!run || run.accountId !== req.accountId) {
+        throw new HttpError(404, "not_found", "Report not found");
+      }
+      const report = reportForRun({
+        assessmentId: run.assessmentId,
+        answers: run.answers as Record<string, unknown>,
+        score: run.score,
+      });
+      if (!report) throw new HttpError(404, "not_found", "Unknown assessment");
+      const pdf = buildAssessmentReportPdf({
+        report,
+        answers: run.answers as Record<string, unknown>,
+        runId: run.id,
+        createdAt: run.createdAt,
+      });
+      const filename = `lokutara-${report.assessmentId}-${run.id.slice(0, 10)}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(Buffer.from(pdf));
+    }),
+  );
+
+  router.get(
+    "/assessments/runs/:runId",
+    requireModule("assessments"),
+    asyncHandler(async (req: AppRequest, res) => {
+      const run = await deps.assessmentRuns.get(req.params.runId);
+      if (!run || run.accountId !== req.accountId) {
+        throw new HttpError(404, "not_found", "Report not found");
+      }
+      const report = reportForRun({
+        assessmentId: run.assessmentId,
+        answers: run.answers as Record<string, unknown>,
+        score: run.score,
+      });
+      if (!report) throw new HttpError(404, "not_found", "Unknown assessment");
+      res.json({
+        run: presentAssessmentRun(run),
+        report,
       });
     }),
   );
@@ -109,6 +150,13 @@ export function createWorkspaceRouter(deps: {
     asyncHandler(async (req: AppRequest, res) => {
       const assessment = LOCAL_ASSESSMENTS.find((item) => item.id === req.params.id);
       if (!assessment) throw new HttpError(404, "not_found", "Unknown assessment");
+      if (req.body?.consent !== true) {
+        throw new HttpError(
+          400,
+          "consent_required",
+          "Confirm the assessment purpose and limitations before submitting",
+        );
+      }
       const raw = req.body?.answers;
       if (!raw || typeof raw !== "object") {
         throw new HttpError(400, "invalid", "Answers are required");
@@ -144,15 +192,17 @@ export function createWorkspaceRouter(deps: {
         assessmentId: assessment.id,
         answers: parsed,
         score: scoreAssessment(assessment, parsed),
+        consentedAt: new Date(),
+        noticeVersion: ASSESSMENT_NOTICE_VERSION,
         createdAt: new Date(),
       });
       res.status(201).json({
-        run: {
-          id: run.id,
+        run: presentAssessmentRun(run),
+        report: reportForRun({
           assessmentId: run.assessmentId,
+          answers: parsed,
           score: run.score,
-          createdAt: run.createdAt.toISOString(),
-        },
+        }),
       });
     }),
   );
@@ -182,6 +232,13 @@ export function createWorkspaceRouter(deps: {
     requireModule("community"),
     asyncHandler(async (req: AppRequest, res) => {
       const body = req.body || {};
+      if (body.communityNoticeAccepted !== true) {
+        throw new HttpError(
+          400,
+          "consent_required",
+          "Confirm the community privacy rules before posting",
+        );
+      }
       const title = typeof body.title === "string" ? body.title.trim() : "";
       const text = typeof body.body === "string" ? body.body.trim() : "";
       const tags = Array.isArray(body.tags)

@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   acceptAllConsent,
+  acceptAnalyticsConsent,
   hasDecided,
   rejectOptionalConsent,
   shouldLoadVendor,
@@ -17,6 +18,7 @@ import {
   writeClientConsent,
 } from "@/lib/tracking/client";
 import { CookieBanner } from "@/components/consent/CookieBanner";
+import { AppToastHost } from "@/components/app/AppToast";
 
 /**
  * Consent is read synchronously on the client so returning visitors never see a
@@ -35,6 +37,14 @@ export function SiteProviders({ children }: { children: React.ReactNode }) {
     // Sync read on mount covers edge cases where SSR null needs a client value.
     const stored = readClientConsent();
     setConsent(stored);
+  }, []);
+
+  useEffect(() => {
+    function syncConsent() {
+      setConsent(readClientConsent());
+    }
+    window.addEventListener("lokutara:consent", syncConsent);
+    return () => window.removeEventListener("lokutara:consent", syncConsent);
   }, []);
 
   useEffect(() => {
@@ -70,15 +80,32 @@ export function SiteProviders({ children }: { children: React.ReactNode }) {
     setConsent(next);
   }
 
-  const showBanner = consent !== null && !hasDecided(consent);
+  function analyticsOnly() {
+    const next = acceptAnalyticsConsent();
+    writeClientConsent(next);
+    setConsent(next);
+  }
+
+  const showBanner =
+    consent !== null &&
+    !hasDecided(consent) &&
+    typeof window !== "undefined" &&
+    !window.location.pathname.startsWith("/app") &&
+    !window.location.pathname.startsWith("/admin");
 
   return (
     <>
       {children}
       {showBanner ? (
-        <CookieBanner consent={consent} onAcceptAll={accept} onRejectOptional={reject} />
+        <CookieBanner
+          consent={consent}
+          onAcceptAll={accept}
+          onAcceptAnalytics={analyticsOnly}
+          onRejectOptional={reject}
+        />
       ) : null}
       {consent && shouldLoadVendor(consent, "analytics") ? <VendorScripts consent={consent} /> : null}
+      <AppToastHost />
     </>
   );
 }

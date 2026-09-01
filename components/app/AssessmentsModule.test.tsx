@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AssessmentsCatalog, AssessmentRunner } from "./AssessmentsModule";
 
@@ -45,6 +45,23 @@ describe("AssessmentsCatalog", () => {
     expect(container.querySelector(".assessment-grid")).toBeTruthy();
     expect(screen.getAllByRole("link", { name: /start test/i })[0]).toHaveAttribute("href", "/app/assessments/ocean");
   });
+
+  it("links finished runs to their reports", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        assessments: [ocean],
+        runs: [{ id: "run_1", assessmentId: "ocean", title: "Trait profile (OCEAN)", score: 72, createdAt: "2026-08-28T00:00:00.000Z" }],
+      }),
+    } as Response);
+    render(<AssessmentsCatalog />);
+    expect(await screen.findByRole("heading", { name: "Your reports" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /trait profile \(ocean\)/i })).toHaveAttribute(
+      "href",
+      "/app/assessments/runs/run_1",
+    );
+  });
 });
 
 describe("AssessmentRunner", () => {
@@ -75,10 +92,15 @@ describe("AssessmentRunner", () => {
       }),
     } as Response);
     const { container } = render(<AssessmentRunner assessmentId="ocean" />);
+    expect(await screen.findByRole("heading", { name: "Trait profile (OCEAN)" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox"));
     expect(await screen.findByText("I look for new ways of doing familiar work.")).toBeInTheDocument();
     expect(container.querySelector(".runner-stage")).toBeTruthy();
     expect(container.querySelector(".runner")).toBeTruthy();
     expect(screen.getByRole("radio", { name: /strongly disagree/i })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Finish" })).toBeInTheDocument());
+    const finish = await screen.findByRole("button", { name: "Finish" });
+    expect(finish).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /strongly agree/i }));
+    expect(screen.getByRole("radio", { name: /strongly agree/i })).toBeChecked();
   });
 });

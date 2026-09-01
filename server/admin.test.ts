@@ -17,6 +17,7 @@ function signupPayload(overrides: Record<string, unknown> = {}) {
     phone: "9876543210",
     age: 34,
     city: "Bengaluru",
+    acceptLegal: true,
     ...overrides,
   };
 }
@@ -96,6 +97,9 @@ describe("admin API", () => {
       sizeBand: null,
       preferredTime: "weekday evenings",
       visitorId: null,
+      consentedAt: new Date("2026-08-26T10:00:00.000Z"),
+      adultConfirmedAt: new Date("2026-08-26T10:00:00.000Z"),
+      privacyNoticeVersion: "account-2026-08-31",
       createdAt: new Date("2026-08-26T10:00:00.000Z"),
     });
 
@@ -179,6 +183,9 @@ describe("presentLeadForAdmin", () => {
       sizeBand: "50-500",
       preferredTime: "Tue",
       visitorId: null,
+      consentedAt: new Date(),
+      adultConfirmedAt: new Date(),
+      privacyNoticeVersion: "account-2026-08-31",
       createdAt: new Date(),
     });
     expect(presented.email).toBe("joel@lokutara.test");
@@ -241,6 +248,48 @@ describe("admin product snapshot", () => {
     expect(revoked.body.account.access.canEnterApp).toBe(false);
   });
 
+  it("gives complimentary access with a ₹0 Given by Admin record that stays out of revenue", async () => {
+    const { server, stores } = app();
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ email: "grant@lokutara.test" }),
+    );
+    const id = signup.body.account.id as string;
+    const before = await request(server).get("/api/admin/overview").set("x-admin-secret", ADMIN_SECRET);
+    expect(before.body.commerce.revenueThisMonth).toBe(0);
+
+    const granted = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "paid" });
+    expect(granted.status).toBe(200);
+    expect(granted.body.account.access.status).toBe("paid");
+    expect(granted.body.invoice.kind).toBe("complimentary");
+    expect(granted.body.invoice.totalPaise).toBe(0);
+    expect(granted.body.invoice.totalLabel).toBe("₹0");
+    expect(granted.body.invoice.sourceLabel).toBe("Given by Admin");
+    expect(granted.body.invoice.paymentUrl).toBeNull();
+    expect(granted.body.invoice.countsTowardRevenue).toBe(false);
+    expect(granted.body.invoice.documentTitle).toBe("Complimentary record");
+
+    const stored = (await stores.invoiceStore.list()).find((row) => row.accountId === id);
+    expect(stored?.kind).toBe("complimentary");
+    expect(stored?.razorpayPaymentId).toBe("admin_grant");
+    expect(stored?.razorpayPaymentLinkId).toBeNull();
+
+    const overview = await request(server).get("/api/admin/overview").set("x-admin-secret", ADMIN_SECRET);
+    expect(overview.body.commerce.revenueThisMonth).toBe(0);
+    expect(overview.body.commerce.paidThisMonth).toBe(0);
+    expect(overview.body.commerce.outstandingPaise).toBe(0);
+    expect(overview.body.accounts.paid).toBe(1);
+
+    const again = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "paid" });
+    expect(again.body.invoice.id).toBe(granted.body.invoice.id);
+    expect((await stores.invoiceStore.list()).filter((row) => row.accountId === id)).toHaveLength(1);
+  });
+
   it("lets the founder set a community reply role", async () => {
     const { server } = app();
     const signup = await request(server).post("/api/auth/signup").send(
@@ -295,6 +344,7 @@ describe("admin invoices", () => {
     expect(created.body.invoice.number).toMatch(/^LKT-26-/);
     expect(created.body.invoice.totalPaise).toBe(2_950_000);
     expect(created.body.invoice.status).toBe("draft");
+    expect(created.body.invoice.kind).toBe("sale");
 
     const issued = await request(server)
       .post(`/api/admin/invoices/${created.body.invoice.id}/issue`)
@@ -358,5 +408,51 @@ describe("admin invoices", () => {
       .post(`/api/admin/invoices/${created.body.invoice.id}/record-payment`)
       .set("x-admin-secret", ADMIN_SECRET);
     expect(paid.body.invoice.status).toBe("paid");
+  });
+
+  it("creates a complimentary invoice without calling Razorpay", async () => {
+    const stores = createMemoryStores();
+    let razorpayCalls = 0;
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      adminSecret: ADMIN_SECRET,
+      razorpay: {
+        configured: true,
+        createPaymentLink: async () => {
+          razorpayCalls += 1;
+          return { id: "plink_should_not", shortUrl: "https://rzp.io/i/nope" };
+        },
+      },
+    });
+    const signup = await request(server).post("/api/auth/signup").send(
+      signupPayload({ email: "comp@lokutara.test" }),
+    );
+    const accountId = signup.body.account.id as string;
+    const created = await request(server)
+      .post("/api/admin/invoices")
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ accountId, sku: "app_access", complimentary: true });
+    expect(created.status).toBe(201);
+    expect(created.body.invoice.kind).toBe("complimentary");
+    expect(created.body.invoice.totalPaise).toBe(0);
+    expect(created.body.invoice.sourceLabel).toBe("Given by Admin");
+    expect(created.body.invoice.paymentUrl).toBeNull();
+    expect(created.body.invoice.status).toBe("paid");
+    expect(razorpayCalls).toBe(0);
+    const account = await stores.accountStore.getById(accountId);
+    expect(account?.plan).toBe("paid");
+    const overview = await request(server).get("/api/admin/overview").set("x-admin-secret", ADMIN_SECRET);
+    expect(overview.body.commerce.revenueThisMonth).toBe(0);
   });
 });

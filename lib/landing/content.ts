@@ -6,6 +6,7 @@ export const PRICING = {
   customDesignMin: { inr: 7500, label: "Custom programme design (from)" },
   customDesignMax: { inr: 15000, label: "Custom programme design (to)" },
   counselling: { inr: 1200, label: "Individual counselling / 60 min" },
+  workspaceYear: { inr: 4999, label: "Lokutara workspace — 12 months" },
 } as const;
 
 export const SIZE_TIERS = [
@@ -38,6 +39,80 @@ export const SIZE_TIERS = [
 export function tierForHeadcount(headcount: number): (typeof SIZE_TIERS)[number] {
   return SIZE_TIERS.find((tier) => headcount <= tier.max) ?? SIZE_TIERS[SIZE_TIERS.length - 1];
 }
+
+export function peopleCountForHeadcount(headcount: number): number {
+  const min = 20;
+  const max = 2000;
+  const minPeople = 3;
+  const maxPeople = 22;
+  const t = Math.min(1, Math.max(0, (headcount - min) / (max - min)));
+  return Math.round(minPeople + t * (maxPeople - minPeople));
+}
+
+export const PEOPLE_FIGURE_MAX = 22;
+
+export const SELL_ITEMS = [
+  {
+    id: "workspace",
+    sku: "app_access" as const,
+    title: "Lokutara workspace — 12 months",
+    blurb: "Assessments, reports as PDF, and community in one login.",
+    detail:
+      "Twelve months of the same dashboard your trial opens: psychometric screens, a written report you can download, and the workshop community. Built for an individual or a people lead who wants the product without waiting on a custom programme.",
+    includes: ["All four assessment screens", "Openable reports and PDF download", "Community inside the same login", "12 months of access"],
+    duration: "12 months",
+    tag: "Product",
+    sizeFit: ["1-49", "50-500"],
+  },
+  {
+    id: "counselling",
+    sku: "counselling" as const,
+    title: "Individual counselling / 60 min",
+    blurb: "A confidential hour with a psychologist. Non-emergency only.",
+    detail:
+      "One 60-minute sitting for an individual question — work, relationships, or personal growth. Session topics are not reported back to an employer. This is not a crisis or psychiatric emergency line; those are referred out.",
+    includes: ["60 minutes, one-to-one", "Confidential to the client", "Follow-up booking if you want another hour"],
+    duration: "60 minutes",
+    tag: "Support",
+    sizeFit: ["1-49", "50-500", "501-2000", "2000+"],
+  },
+  {
+    id: "virtual_session",
+    sku: "virtual_session" as const,
+    title: "2–3 hrs virtual session",
+    blurb: "A live virtual session for a team that cannot gather in a room.",
+    detail:
+      "A facilitated 2–3 hour virtual sitting. The brief is written after we understand the team — communication, collaboration, or manager practice — not a canned webinar. Participant numbers and outcomes are confirmed before the date.",
+    includes: ["2–3 hours live, virtual", "Facilitation included", "Agenda agreed after a short brief"],
+    duration: "2–3 hours",
+    tag: "Build",
+    sizeFit: ["1-49", "50-500"],
+  },
+  {
+    id: "workshop",
+    sku: "workshop" as const,
+    title: "2–3 hour workshop",
+    blurb: "An in-room or hybrid workshop designed around the people you have now.",
+    detail:
+      "The paid core for most Bengaluru teams of about 50–500. We design from the problem you name in discovery: manager effectiveness, teamwork, or psychological skills for workplace demand. Facilitation is included. A participant cap is set in the proposal.",
+    includes: ["2–3 hours, facilitated", "Designed after discovery", "Participant feedback at the close"],
+    duration: "2–3 hours",
+    tag: "Build",
+    sizeFit: ["50-500", "501-2000"],
+  },
+  {
+    id: "full_day",
+    sku: "full_day" as const,
+    title: "Full day tailored workshop",
+    blurb: "A full day for a named audience, with time to practise, not only to hear a talk.",
+    detail:
+      "When a 2–3 hour sitting is not enough room. A full day tailored to one audience — often managers or a whole function — with practice, not a slide dump. Scope, headcount, and an employer summary are confirmed before we hold the date.",
+    includes: ["Full working day", "Tailored to a named audience", "Employer summary without counselling content"],
+    duration: "Full day",
+    tag: "Build",
+    sizeFit: ["50-500", "501-2000", "2000+"],
+  },
+] as const;
 
 export const AUDIENCE = [
   {

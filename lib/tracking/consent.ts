@@ -43,6 +43,15 @@ export function acceptAllConsent(now = new Date()): ConsentState {
   };
 }
 
+export function acceptAnalyticsConsent(now = new Date()): ConsentState {
+  return {
+    necessary: true,
+    analytics: true,
+    marketing: false,
+    decidedAt: now.toISOString(),
+  };
+}
+
 export function rejectOptionalConsent(now = new Date()): ConsentState {
   return {
     necessary: true,

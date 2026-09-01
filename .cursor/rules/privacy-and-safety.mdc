@@ -1,0 +1,41 @@
+---
+description: Privacy, psychometric, counselling, community, and payment safeguards
+alwaysApply: true
+---
+
+# Lokutara compliance gate
+
+For every feature, identify personal data, purpose, recipient, retention, legal
+basis/consent, user control, access role, and logging before implementation.
+
+- Collect only fields needed for the stated purpose. Never place assessment
+  answers, counselling details, diagnoses, or community bodies in analytics or
+  general application logs.
+- Present a plain-language notice at collection. Record the accepted notice
+  version and timestamp where consent or acknowledgement is required.
+- Keep the service adult-only unless verified parent/guardian consent and a
+  child-specific legal review are implemented.
+- Assessment outputs are developmental, non-diagnostic, and never the sole
+  basis for hiring, firing, promotion, discipline, compensation, treatment, or
+  another consequential decision. Require human review and accommodations.
+- Keep counselling content separate from employer reporting, analytics,
+  community, leads, and general product administration.
+- Require least-privilege authorization for every private record. Test
+  cross-account access and admin redaction.
+- Support access/export, correction, consent withdrawal, grievance, and
+  erasure. Preserve only statutory, security, dispute, or legal-hold records
+  and document why.
+- User-generated content needs privacy warnings, rules, complaint intake,
+  moderation, and lawful preservation/takedown handling.
+- Show the full GST-inclusive price, seller identity, delivery, cancellation,
+  refund, and grievance information before payment. Never store card/UPI
+  credentials.
+- New processors or cross-border transfers require a vendor review, contract,
+  location, subprocessor, deletion, breach, and security entry.
+- Security changes must preserve same-origin mutation checks, secure cookies,
+  rate limits, input limits, auditability, incident response, and CERT-In log
+  and reporting duties.
+- Update `lib/legal/compliance.ts`, public notices, tests, and
+  `docs/compliance/` whenever data use, vendors, claims, or retention changes.
+- Do not claim “compliant”, “validated”, “licensed psychometric”, “clinical”,
+  or “confidential” without evidence and owner/counsel approval.

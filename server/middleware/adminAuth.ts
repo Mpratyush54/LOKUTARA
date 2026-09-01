@@ -1,5 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { HttpError } from "./errors";
 
 export const ADMIN_COOKIE = "lokutara_admin";
@@ -9,7 +9,8 @@ export type AdminCredentials = {
   /** When set, login requires this email (case-insensitive) plus the password. */
   email: string | null;
   /**
-   * Shared password for cookie / Bearer / x-admin-secret.
+   * Shared password for login, Bearer, or x-admin-secret. The cookie stores a
+   * derived session token rather than the password.
    * Resolved as ADMIN_PASSWORD, else ADMIN_DASHBOARD_SECRET (legacy).
    */
   password: string | null;
@@ -29,6 +30,12 @@ export function secretsEqual(provided: string, expected: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function adminSessionToken(password: string): string {
+  return createHmac("sha256", password)
+    .update("lokutara-admin-session-v1")
+    .digest("hex");
 }
 
 export function emailsEqual(provided: string, expected: string): boolean {
@@ -73,7 +80,10 @@ export function isAdminAuthorized(
   if (!password) return false;
   const provided = extractAdminCredential(req);
   if (!provided) return false;
-  return secretsEqual(provided, password);
+  return (
+    secretsEqual(provided, password) ||
+    secretsEqual(provided, adminSessionToken(password))
+  );
 }
 
 export function requireAdmin(password = readAdminCredentials().password): RequestHandler {

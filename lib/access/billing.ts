@@ -32,6 +32,8 @@ export type AccountRecord = {
   seats: number;
   createdAt: Date;
   communityRole?: CommunityRole;
+  termsAcceptedAt?: Date | null;
+  privacyNoticeVersion?: string | null;
 };
 
 export type AccessStatus = "none" | "trial" | "paid" | "expired";
@@ -134,6 +136,8 @@ export function presentAccount(account: AccountRecord, now = new Date()) {
     organisation: account.organisation ?? null,
     seats: account.seats,
     createdAt: account.createdAt.toISOString(),
+    termsAcceptedAt: account.termsAcceptedAt?.toISOString() ?? null,
+    privacyNoticeVersion: account.privacyNoticeVersion ?? null,
     access,
     communityRole,
   };

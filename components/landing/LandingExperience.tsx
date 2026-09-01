@@ -1,13 +1,29 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ABOUT_POINTS, AUDIENCE, OFFERINGS, PILLARS, PRICING, BOOKING_STEPS, tierForHeadcount } from "@/lib/landing/content";
+import { ABOUT_POINTS, AUDIENCE, PILLARS, PRICING, BOOKING_STEPS, SELL_ITEMS } from "@/lib/landing/content";
 import { NeedGuide } from "@/components/landing/NeedGuide";
+import { BuyNowButton } from "@/components/landing/BuyNowButton";
 import { PilotSteps } from "@/components/landing/PilotSteps";
+import { GUIDE_SERVICES, recommendGuide } from "@/lib/landing/guide";
+import {
+  EMPTY_LANDING_QUERY,
+  parseLandingQuery,
+  sizeBandForHeadcount,
+  writeLandingUrl,
+  type LandingQuery,
+} from "@/lib/landing/urlState";
+import { skuCatalog } from "@/lib/billing/catalog";
+import { invoiceTotals, formatInrFromPaise } from "@/lib/billing/invoices";
 import { experimentFor, loadExperimentConfigs, submitLead, track } from "@/lib/tracking/client";
 import { useReveal } from "@/hooks/useMotion";
+import { scrollPageTo, useScrollLock } from "@/hooks/useScrollLock";
 
 type FormType = "discovery" | "counselling" | "popup";
+
+function gstTotalLabel(sku: (typeof SELL_ITEMS)[number]["sku"]) {
+  return formatInrFromPaise(invoiceTotals(skuCatalog(sku).unitAmountPaise, 1, 18).totalPaise);
+}
 
 function RevealSection({
   id,
@@ -26,12 +42,24 @@ function RevealSection({
   );
 }
 
-export function LandingExperience() {
-  const [audience, setAudience] = useState(0);
-  const [headcount, setHeadcount] = useState(120);
-  const [offering, setOffering] = useState<(typeof OFFERINGS)[number] | null>(null);
-  const [pillar, setPillar] = useState(0);
-  const [phone, setPhone] = useState(1);
+export function LandingExperience({ initial }: { initial?: LandingQuery }) {
+  const seed = initial ?? EMPTY_LANDING_QUERY;
+  const [audience, setAudience] = useState(() => {
+    const i = AUDIENCE.findIndex((item) => item.id === seed.audience);
+    return i >= 0 ? i : 0;
+  });
+  const [headcount, setHeadcount] = useState(seed.headcount ?? 120);
+  const [offering, setOffering] = useState<(typeof SELL_ITEMS)[number] | null>(
+    () => SELL_ITEMS.find((item) => item.id === seed.offer || item.sku === seed.offer) ?? null,
+  );
+  const [pillar, setPillar] = useState(() => {
+    const i = PILLARS.findIndex((item) => item.id === seed.pillar);
+    return i >= 0 ? i : 0;
+  });
+  const [phone, setPhone] = useState(() => {
+    const i = BOOKING_STEPS.findIndex((item) => item.id === seed.phone);
+    return i >= 0 ? i : 1;
+  });
   const [phonePaused, setPhonePaused] = useState(false);
   const [form, setForm] = useState<FormType | null>(null);
   const [popup, setPopup] = useState(false);
@@ -45,10 +73,29 @@ export function LandingExperience() {
   const [navOpen, setNavOpen] = useState(false);
   const [navScrolled, setNavScrolled] = useState(false);
   const [parallax, setParallax] = useState({ y: 0, opacity: 1, visualY: 0 });
+  const [paidNotice, setPaidNotice] = useState(Boolean(seed.paid));
+  const [guideWho, setGuideWho] = useState(seed.who);
+  const [guideNoticing, setGuideNoticing] = useState(seed.noticing);
+  const [guideAffected, setGuideAffected] = useState(seed.affected);
+  const [guideSuccess, setGuideSuccess] = useState(seed.success);
+  useScrollLock(Boolean(form || popup));
   const heroCopyRef = useRef<HTMLDivElement>(null);
   const heroVisualRef = useRef<HTMLDivElement>(null);
   const outcomesReveal = useReveal<HTMLElement>();
-  const tier = useMemo(() => tierForHeadcount(headcount), [headcount]);
+  const sizeBand = sizeBandForHeadcount(headcount);
+  const recommendedSellIds = useMemo(() => {
+    const fromGuide = recommendGuide({
+      sizeBand,
+      who: guideWho,
+      noticing: guideNoticing,
+      affected: guideAffected,
+      success: guideSuccess,
+    })
+      .map((id) => GUIDE_SERVICES[id].sellId)
+      .filter((id): id is string => Boolean(id));
+    if (guideWho || guideNoticing) return new Set(fromGuide);
+    return new Set<string>();
+  }, [sizeBand, guideWho, guideNoticing, guideAffected, guideSuccess]);
   const bars = useMemo(
     () => Array.from({ length: 24 }, (_, i) => ({ left: i * 4.2 + 1, height: 25 + ((i * 17) % 55), delay: (i % 7) * 0.2 })),
     [],
@@ -58,7 +105,7 @@ export function LandingExperience() {
     void (async () => {
       await loadExperimentConfigs();
       const variant = experimentFor("hero_cta");
-      setCtaLabel(variant === "variant" ? "Talk to the founders" : "Book a discovery call");
+      setCtaLabel(variant === "variant" ? "Get in touch" : "Book a discovery call");
     })();
     const timer = window.setTimeout(() => {
       if (!sessionStorage.getItem("lokutara-popup")) {
@@ -67,6 +114,39 @@ export function LandingExperience() {
       }
     }, 4500);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const id = window.location.hash.replace("#", "");
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (el) scrollPageTo(el, true);
+  }, []);
+
+  useEffect(() => {
+    function sync() {
+      const next = parseLandingQuery(new URLSearchParams(window.location.search));
+      const audienceIndex = AUDIENCE.findIndex((item) => item.id === next.audience);
+      if (audienceIndex >= 0) setAudience(audienceIndex);
+      if (next.headcount) setHeadcount(next.headcount);
+      const sell = SELL_ITEMS.find((item) => item.id === next.offer || item.sku === next.offer) ?? null;
+      setOffering(sell);
+      const pillarIndex = PILLARS.findIndex((item) => item.id === next.pillar);
+      if (pillarIndex >= 0) setPillar(pillarIndex);
+      const phoneIndex = BOOKING_STEPS.findIndex((item) => item.id === next.phone);
+      if (phoneIndex >= 0) setPhone(phoneIndex);
+      setPaidNotice(next.paid);
+      setGuideWho(next.who);
+      setGuideNoticing(next.noticing);
+      setGuideAffected(next.affected);
+      setGuideSuccess(next.success);
+    }
+    window.addEventListener("popstate", sync);
+    window.addEventListener("lokutara:url", sync);
+    return () => {
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener("lokutara:url", sync);
+    };
   }, []);
 
   useEffect(() => {
@@ -124,7 +204,7 @@ export function LandingExperience() {
   function goTo(hash: string) {
     setNavOpen(false);
     const el = document.querySelector(hash);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (el) scrollPageTo(el);
   }
 
   return (
@@ -240,86 +320,51 @@ export function LandingExperience() {
             </div>
             <div className="audience-tabs">
               {AUDIENCE.map((tab, i) => (
-                <button
+                <article
                   key={tab.id}
-                  type="button"
-                  className={`audience-tab reveal-delay-${(i % 4) + 1}${audience === i ? " active" : ""}`}
-                  aria-pressed={audience === i}
-                  onMouseEnter={() => setAudience(i)}
-                  onFocus={() => setAudience(i)}
-                  onClick={() => setAudience(i)}
+                  className={`audience-tab reveal-delay-${(i % 4) + 1}${audience === i ? " is-on" : ""}`}
+                  aria-current={audience === i ? "true" : undefined}
+                  onClick={() => {
+                    setAudience(i);
+                    writeLandingUrl({ audience: tab.id }, "replace");
+                  }}
                 >
                   <h3>{tab.title}</h3>
                   <p>{tab.copy}</p>
-                </button>
+                  <div className="audience-tab-foot">
+                    <p className="audience-note">{tab.detail}</p>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAudience(i);
+                        writeLandingUrl({ audience: tab.id }, "replace");
+                        openForm(tab.form);
+                      }}
+                    >
+                      {tab.cta}
+                    </button>
+                  </div>
+                </article>
               ))}
-            </div>
-            <div className="audience-detail" key={audience}>
-              <p className="meta">{AUDIENCE[audience].detail}</p>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => openForm(AUDIENCE[audience].form)}
-              >
-                {AUDIENCE[audience].cta}
-              </button>
             </div>
           </div>
         </RevealSection>
 
         <RevealSection id="guide">
           <div className="container stack" style={{ gap: 32 }}>
-            <div style={{ maxWidth: "22ch" }}>
+            <div style={{ maxWidth: "28ch" }}>
               <p className="eyebrow" style={{ color: "var(--forest)" }}>
                 If the four doors are not obvious
               </p>
               <h2>Not sure what you need? Let’s figure it out.</h2>
             </div>
             <NeedGuide
+              initial={seed}
               onBookDiscovery={() => openForm("discovery")}
               onAskPsychologist={() => openForm("counselling")}
             />
-          </div>
-        </RevealSection>
-
-        <RevealSection id="size">
-          <div className="container grid-2-1">
-            <div className="size-tool">
-              <p className="eyebrow" style={{ color: "var(--forest)" }}>
-                Right-sized for you
-              </p>
-              <h2>Select your company size</h2>
-              <p className="lead" style={{ marginTop: 12 }}>
-                Drag to see how we talk to teams of your size. The first segment is 50–500 people in Bengaluru.
-              </p>
-              <div className="size-display num">{headcount.toLocaleString("en-IN")}</div>
-              <span className="meta">employees</span>
-              <input
-                className="size-slider"
-                type="range"
-                min={20}
-                max={2000}
-                step={10}
-                value={headcount}
-                aria-label="Company size in employees"
-                onChange={(e) => {
-                  const value = Number(e.target.value);
-                  setHeadcount(value);
-                  track("slider_change", { headcount: value, tier: tierForHeadcount(value).tier });
-                }}
-              />
-              <div className="size-copy" key={tier.tier}>{tier.msg}</div>
-            </div>
-            <div className="size-illus">
-              <div className="size-people">
-                {Array.from({ length: tier.count }, (_, i) => (
-                  <div key={i} className={`size-person${i % 3 === 0 ? " accent" : ""}`} style={{ height: 48 + (i % 5) * 10 }} />
-                ))}
-              </div>
-              <span className="size-illus-label">
-                {tier.tier} · {headcount.toLocaleString("en-IN")} people
-              </span>
-            </div>
           </div>
         </RevealSection>
 
@@ -424,6 +469,7 @@ export function LandingExperience() {
                         }}
                         onClick={() => {
                           setPillar(i);
+                          writeLandingUrl({ pillar: node.id }, "replace");
                           track("pillar_select", { pillar: node.id });
                         }}
                       >
@@ -444,24 +490,51 @@ export function LandingExperience() {
                 Launch offer
               </p>
               <h2>What we sell now. Click for detail.</h2>
+              <p className="lead" style={{ marginTop: 12, maxWidth: "52ch" }}>
+                Five sittings you can book now. The questions above mark what fits. Open a card for the brief — Buy now starts payment, and the URL keeps your place.
+              </p>
             </div>
-            <div className="service-grid">
-              {OFFERINGS.map((item, i) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`service-card reveal-delay-${(i % 4) + 1}`}
-                  onClick={() => {
-                    setOffering(item);
-                    track("offering_open", { id: item.id });
-                  }}
-                >
-                  <span className="svc-icon">●</span>
-                  <h3>{item.title}</h3>
-                  <p>{item.blurb}</p>
-                  <span className="svc-arrow">{item.tag} →</span>
-                </button>
-              ))}
+            {paidNotice ? (
+              <p className="upgrade-banner" role="status">
+                If you just paid, the receipt is on its way. You can reload this page — the offer stays in the URL.
+              </p>
+            ) : null}
+            <div className="sell-grid">
+              {SELL_ITEMS.map((item, i) => {
+                const recommended = recommendedSellIds.has(item.id);
+                return (
+                  <article
+                    key={item.id}
+                    className={`sell-card reveal-delay-${(i % 4) + 1}${recommended ? " is-recommended" : ""}`}
+                  >
+                    <button
+                      type="button"
+                      className="sell-card-open"
+                      onClick={() => {
+                        setOffering(item);
+                        writeLandingUrl({ offer: item.id }, "push");
+                        track("offering_open", { id: item.id });
+                      }}
+                    >
+                      <span className="sell-card-top">
+                        <span className="sell-kicker">{item.tag}</span>
+                        {recommended ? <span className="sell-fit">Fits you</span> : null}
+                      </span>
+                      <h3>{item.title}</h3>
+                      <p className="sell-blurb">{item.blurb}</p>
+                      <div className="sell-card-foot">
+                        <p className="sell-price num">{gstTotalLabel(item.sku)}</p>
+                        <p className="meta">{item.duration} · including GST</p>
+                      </div>
+                    </button>
+                    <div className="sell-card-cta">
+                      <BuyNowButton sku={item.sku} restoreFromUrl>
+                        Buy now
+                      </BuyNowButton>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </div>
         </RevealSection>
@@ -487,6 +560,7 @@ export function LandingExperience() {
                   onClick={() => {
                     setPhone(i);
                     setPhonePaused(true);
+                    writeLandingUrl({ phone: item.id }, "replace");
                     track("booking_step_view", { step: item.id });
                   }}
                 >
@@ -514,6 +588,7 @@ export function LandingExperience() {
                   onClick={() => {
                     setPhone(i);
                     setPhonePaused(true);
+                    writeLandingUrl({ phone: item.id }, "replace");
                   }}
                   aria-label={item.title}
                 >
@@ -607,6 +682,14 @@ export function LandingExperience() {
         <div className="container row-between">
           <span>© Lokutara · Bengaluru · 2026</span>
           <span className="meta">
+            <a href="/privacy">Privacy</a>
+            {" · "}
+            <a href="/terms">Terms</a>
+            {" · "}
+            <a href="/safeguards">Safeguards</a>
+            {" · "}
+            <a href="/compliance">Compliance</a>
+            {" · "}
             <a href="/cookies">Cookies</a>
             {" · "}
             Not an emergency or psychiatric crisis line.
@@ -616,16 +699,35 @@ export function LandingExperience() {
 
       <div className={`service-page${offering ? " open" : ""}`}>
         <div className="service-page-inner">
-          <button type="button" className="btn btn-ghost" onClick={() => setOffering(null)}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              setOffering(null);
+              writeLandingUrl({ offer: null }, "push");
+            }}
+          >
             ← Back to offerings
           </button>
           {offering ? (
             <>
-              <p className="pill">{offering.tag}</p>
+              <p className="sell-kicker">{offering.tag}</p>
               <h1 style={{ marginTop: 16 }}>{offering.title}</h1>
               <p className="lead" style={{ marginTop: 16 }}>
                 {offering.detail}
               </p>
+              <p className="sell-price num" style={{ marginTop: 28 }}>
+                {gstTotalLabel(offering.sku)}
+              </p>
+              <p className="meta">{offering.duration} · including GST</p>
+              <ul className="sell-includes">
+                {offering.includes.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+              <div style={{ marginTop: 28 }}>
+                <BuyNowButton sku={offering.sku}>Buy now</BuyNowButton>
+              </div>
             </>
           ) : null}
         </div>
@@ -713,6 +815,11 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
   const [error, setError] = useState("");
   const [ok, setOk] = useState(false);
   const isCounselling = type === "counselling";
+  const titleRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    titleRef.current?.focus({ preventScroll: true });
+  }, []);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -728,6 +835,8 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
         organisation: data.get("organisation"),
         sizeBand: data.get("sizeBand"),
         preferredTime: data.get("preferredTime"),
+        privacyAccepted: data.get("privacyAccepted") === "on",
+        adultConfirmed: data.get("privacyAccepted") === "on",
       });
       await track("lead_submitted", { type: isCounselling ? "counselling" : "discovery" });
       if (type === "popup") await track("popup_submitted");
@@ -743,7 +852,9 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
         <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
           ×
         </button>
-        <h2>{isCounselling ? "Request counselling" : "Discovery call"}</h2>
+        <h2 ref={titleRef} tabIndex={-1}>
+          {isCounselling ? "Request counselling" : "Discovery call"}
+        </h2>
         <p className="meta" style={{ margin: "8px 0 20px" }}>
           {isCounselling
             ? "Non-emergency only. Do not write clinical details here."
@@ -792,6 +903,14 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
                 </div>
               </>
             )}
+            <label className="legal-check">
+              <input type="checkbox" name="privacyAccepted" required />
+              <span>
+                I am 18 or older, have read the <a href="/privacy">Privacy Notice</a>,
+                and agree to be contacted about this request. I will not include
+                confidential or clinical details here.
+              </span>
+            </label>
             <button type="submit" className="btn btn-primary" style={{ width: "100%" }}>
               Send
             </button>

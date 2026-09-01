@@ -33,9 +33,9 @@ export const INVOICE_SKUS = [
   },
   {
     sku: "app_access",
-    label: "App access",
-    unitAmountPaise: 0,
-    custom: true,
+    label: PRICING.workspaceYear.label,
+    unitAmountPaise: PRICING.workspaceYear.inr * 100,
+    custom: false,
   },
   {
     sku: "custom",
@@ -47,12 +47,31 @@ export const INVOICE_SKUS = [
 
 export type InvoiceSku = (typeof INVOICE_SKUS)[number]["sku"];
 
+export const CUSTOMER_CHECKOUT_SKUS = [
+  "app_access",
+  "counselling",
+  "virtual_session",
+  "workshop",
+  "full_day",
+] as const satisfies readonly InvoiceSku[];
+
+export type CustomerCheckoutSku = (typeof CUSTOMER_CHECKOUT_SKUS)[number];
+
 const SKU_SET = new Set(INVOICE_SKUS.map((item) => item.sku));
+const CUSTOMER_SKU_SET = new Set<string>(CUSTOMER_CHECKOUT_SKUS);
 
 export function isInvoiceSku(value: string): value is InvoiceSku {
   return SKU_SET.has(value as InvoiceSku);
 }
 
+export function isCustomerSku(value: string): value is CustomerCheckoutSku {
+  return CUSTOMER_SKU_SET.has(value);
+}
+
 export function skuCatalog(sku: InvoiceSku) {
   return INVOICE_SKUS.find((item) => item.sku === sku)!;
+}
+
+export function skuGrantsAccess(sku: InvoiceSku): boolean {
+  return sku === "app_access";
 }

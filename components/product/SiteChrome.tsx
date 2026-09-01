@@ -73,6 +73,12 @@ export function SiteChrome({
         <div className="container row-between">
           <p className="meta">Lokutara · one product, one dashboard</p>
           <p className="meta">
+            <Link href="/privacy">Privacy</Link>
+            {" · "}
+            <Link href="/terms">Terms</Link>
+            {" · "}
+            <Link href="/safeguards">Safeguards</Link>
+            {" · "}
             <Link href="/cookies">Cookies</Link>
           </p>
         </div>

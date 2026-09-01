@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { AssessmentItem, LocalAssessment, RankItem, StoredAnswer } from "@/lib/product/workspace";
 import { jsonFetch } from "./AppShell";
+import { showAppToast } from "./AppToast";
+import { DownloadReportButton } from "./DownloadReportButton";
 
 type CatalogItem = {
   id: string;
@@ -18,7 +20,7 @@ type CatalogItem = {
   kind: "mcq" | "rank";
 };
 
-type Run = { id: string; assessmentId: string; score: number; createdAt: string };
+type Run = { id: string; assessmentId: string; title?: string; score: number; createdAt: string };
 
 export function AssessmentsCatalog() {
   const [items, setItems] = useState<CatalogItem[]>([]);
@@ -32,16 +34,18 @@ export function AssessmentsCatalog() {
   useEffect(() => {
     void (async () => {
       const { res, body } = await jsonFetch("/api/workspace/assessments");
-      if (res.status === 402) {
-        setError("This module is not on your plan.");
-        setReady(true);
-        return;
-      }
-      if (!res.ok) {
-        setError(body.message || "Could not load assessments");
-        setReady(true);
-        return;
-      }
+    if (res.status === 402) {
+      showAppToast("This module is not on your plan.");
+      setError("This module is not on your plan.");
+      setReady(true);
+      return;
+    }
+    if (!res.ok) {
+      showAppToast(body.message || "Could not load assessments. Try again in a moment.");
+      setError(body.message || "Could not load assessments");
+      setReady(true);
+      return;
+    }
       setItems(body.assessments || []);
       setRuns(body.runs || []);
       setReady(true);
@@ -58,7 +62,13 @@ export function AssessmentsCatalog() {
     });
   }, [items, search, track, tab]);
 
-  if (error) return <p className="app-error">{error}</p>;
+  if (error) {
+    return (
+      <p className="lead">
+        Assessments could not load. <Link href="/app">Back to dashboard</Link>.
+      </p>
+    );
+  }
   if (!ready) {
     return (
       <div className="module-stack" aria-busy="true">
@@ -78,18 +88,19 @@ export function AssessmentsCatalog() {
         <p className="eyebrow">Measure</p>
         <h1>Assessments</h1>
         <p className="lead">
-          Catalog and runner remapped from Competency-Mapping: search, recommended, MCQ, and Kolb ranking. Not a second product URL — and not a licensed psychometric.
+          Catalog of workshop screens: search, recommended, MCQ, and ranking. Open a report after you finish — results stay in this workspace.
         </p>
       </header>
       <div className="community-filters">
         <input
+          className="input"
           type="search"
           placeholder="Search assessments"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Search assessments"
         />
-        <select value={track} onChange={(e) => setTrack(e.target.value as typeof track)} aria-label="Filter by track">
+        <select className="input" value={track} onChange={(e) => setTrack(e.target.value as typeof track)} aria-label="Filter by track">
           <option value="all">All tracks</option>
           <option value="psychology">Psychology</option>
           <option value="placement">Placement</option>
@@ -104,8 +115,8 @@ export function AssessmentsCatalog() {
         </button>
       </div>
       <div className="assessment-grid">
-        {filtered.map((item) => (
-          <article key={item.id} className="module-card test-card">
+        {filtered.map((item, i) => (
+          <article key={item.id} className={`module-card test-card dash-in delay-${Math.min(i, 4) || 1}`}>
             <div className="test-card-top">
               <p className="meta">{item.level}</p>
               {item.recommended ? <span className="app-plan-pill">Recommended</span> : null}
@@ -124,12 +135,14 @@ export function AssessmentsCatalog() {
       {!filtered.length ? <p className="product-empty">No assessments match that filter.</p> : null}
       {runs.length ? (
         <section>
-          <h2 className="admin-h2">Your recent runs</h2>
+          <h2 className="admin-h2">Your reports</h2>
           <ul className="run-list">
             {runs.slice(0, 8).map((run) => (
               <li key={run.id}>
-                <span>{run.assessmentId}</span>
-                <span className="num">{run.score}</span>
+                <Link href={`/app/assessments/runs/${run.id}`} className="run-link">
+                  <span>{run.title || run.assessmentId}</span>
+                  <span className="num">{run.score}</span>
+                </Link>
               </li>
             ))}
           </ul>
@@ -205,8 +218,11 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
   const [answers, setAnswers] = useState<Record<string, StoredAnswer>>({});
   const [complete, setComplete] = useState(false);
   const [score, setScore] = useState<number | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [headline, setHeadline] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [noticeAccepted, setNoticeAccepted] = useState(false);
   const bufferKey = `lokutara_test_${assessmentId}`;
 
   useEffect(() => {
@@ -214,6 +230,7 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
     void (async () => {
       const { res, body } = await jsonFetch(`/api/workspace/assessments/${assessmentId}`);
       if (!res.ok) {
+        showAppToast(body.message || "Could not open this assessment.");
         setError(body.message || "Could not open this assessment");
         return;
       }
@@ -262,14 +279,13 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
 
   async function submit() {
     setSaving(true);
-    setError(null);
     const { res, body } = await jsonFetch(`/api/workspace/assessments/${assessmentId}/submit`, {
       method: "POST",
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answers, consent: noticeAccepted }),
     });
     setSaving(false);
     if (!res.ok) {
-      setError(body.message || "Could not save");
+      showAppToast(body.message || "Could not save this sitting. Try again in a moment.");
       return;
     }
     try {
@@ -278,12 +294,16 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
       /* ignore */
     }
     setScore(body.run.score);
+    setRunId(body.run.id);
+    setHeadline(typeof body.report?.headline === "string" ? body.report.headline : null);
   }
 
   if (error && !assessment) {
     return (
       <div className="runner-stage">
-        <p className="app-error">{error}</p>
+        <p className="lead">
+          This assessment could not be opened. <Link href="/app/assessments">All assessments</Link>.
+        </p>
       </div>
     );
   }
@@ -295,8 +315,41 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
     );
   }
 
-  const item: AssessmentItem | undefined = assessment.items[index];
-  const progress = Math.round(((index + 1) / assessment.items.length) * 100);
+  if (!noticeAccepted) {
+    return (
+      <div className="runner-stage">
+        <section className="runner assessment-notice">
+          <p className="eyebrow">Before you begin</p>
+          <h1>{assessment.title}</h1>
+          <p className="lead">
+            This is a self-report development aid. It is not a diagnosis, a licensed
+            psychometric unless expressly identified as one, or a sufficient basis for an
+            employment decision.
+          </p>
+          <ul>
+            <li>Your answers and report are saved to your Lokutara account.</li>
+            <li>They stay with you unless you authorise a defined sharing arrangement.</li>
+            <li>You may stop before submission and request an accessible alternative.</li>
+          </ul>
+          <label className="legal-check">
+            <input
+              type="checkbox"
+              checked={noticeAccepted}
+              onChange={(event) => setNoticeAccepted(event.target.checked)}
+            />
+            <span>
+              I understand the purpose and limits, and I want to take this assessment. See{" "}
+              <Link href="/safeguards">assessment safeguards</Link>.
+            </span>
+          </label>
+        </section>
+      </div>
+    );
+  }
+
+  const activeAssessment = assessment;
+  const item: AssessmentItem | undefined = activeAssessment.items[index];
+  const progress = Math.round(((index + 1) / activeAssessment.items.length) * 100);
   const answered = Object.keys(answers).length;
 
   if (score !== null) {
@@ -307,12 +360,21 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
           <h1>Assessment complete</h1>
           <p className="result-score num">{score}</p>
           <p className="lead">
-            {assessment.title} · {answered} of {assessment.items.length} answered. A conversation sketch, not a diagnostic.
+            {headline || `${activeAssessment.title} · ${answered} of ${activeAssessment.items.length} answered.`}
           </p>
           <div className="runner-nav">
-            <Link className="btn btn-primary" href="/app/assessments">
-              Back to assessments
-            </Link>
+            {runId ? (
+              <>
+                <Link className="btn btn-primary" href={`/app/assessments/runs/${runId}`}>
+                  View report
+                </Link>
+                <DownloadReportButton runId={runId} />
+              </>
+            ) : (
+              <Link className="btn btn-primary" href="/app/assessments">
+                Back to assessments
+              </Link>
+            )}
             <button type="button" className="btn btn-secondary" onClick={() => { setScore(null); setComplete(false); }}>
               Review answers
             </button>
@@ -328,10 +390,9 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
         <section className="runner runner-complete">
           <h1>Ready to submit?</h1>
           <p className="lead">
-            {assessment.title}. You have answered {answered} of {assessment.items.length}.
+            {activeAssessment.title}. You have answered {answered} of {activeAssessment.items.length}.
           </p>
-          {error ? <p className="app-error">{error}</p> : null}
-          {answered < assessment.items.length ? (
+          {answered < activeAssessment.items.length ? (
             <p className="meta">Answer every item before submitting.</p>
           ) : null}
           <div className="runner-nav">
@@ -341,7 +402,7 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
             <button
               type="button"
               className="btn btn-primary"
-              disabled={saving || answered < assessment.items.length}
+              disabled={saving || answered < activeAssessment.items.length}
               onClick={() => void submit()}
             >
               {saving ? "Saving…" : "Submit test"}
@@ -353,9 +414,11 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
   }
 
   const isRank = item?.kind === "rank";
+  const currentAnswered = Boolean(item && answers[item.id]);
 
   function goNext() {
-    if (index < assessment.items.length - 1) setIndex((n) => n + 1);
+    if (!currentAnswered) return;
+    if (index < activeAssessment.items.length - 1) setIndex((n) => n + 1);
     else setComplete(true);
   }
 
@@ -363,7 +426,10 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
     setAnswers((prev) => ({ ...prev, [itemId]: { kind: "mcq", value } }));
     const reduceMotion =
       typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    window.setTimeout(goNext, reduceMotion ? 0 : 180);
+    window.setTimeout(() => {
+      if (index < activeAssessment.items.length - 1) setIndex((n) => n + 1);
+      else setComplete(true);
+    }, reduceMotion ? 0 : 220);
   }
 
   return (
@@ -374,9 +440,9 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
         </button>
         <header className="runner-hero">
           <div>
-            <p className="eyebrow">{assessment.title}</p>
+            <p className="eyebrow">{activeAssessment.title}</p>
             <p className="meta">
-              Question {index + 1} of {assessment.items.length}
+              Question {index + 1} of {activeAssessment.items.length}
             </p>
           </div>
           <span className="runner-pct num">{progress}%</span>
@@ -384,7 +450,7 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
         <div className="runner-progress" aria-hidden="true">
           <span style={{ width: `${progress}%` }} />
         </div>
-        <div className="runner-body">
+        <div className="runner-body" key={item?.id}>
           {item?.kind === "mcq" ? (
             <>
               <div className="runner-prompt">
@@ -392,7 +458,8 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
               </div>
               <div className="likert" role="radiogroup" aria-label={item.prompt}>
                 {item.options.map((option) => {
-                  const selected = answers[item.id]?.kind === "mcq" && answers[item.id].value === option.value;
+                  const answer = answers[item.id];
+                  const selected = answer?.kind === "mcq" && answer.value === option.value;
                   return (
                     <label key={option.value} className={selected ? "is-on" : undefined}>
                       <input
@@ -417,19 +484,25 @@ export function AssessmentRunner({ assessmentId }: { assessmentId: string }) {
               </div>
               <KolbRanker
                 item={item}
-                value={answers[item.id]?.kind === "rank" ? answers[item.id] : undefined}
+                value={
+                  answers[item.id]?.kind === "rank"
+                    ? (answers[item.id] as StoredAnswer & { kind: "rank" })
+                    : undefined
+                }
                 onChange={(next) => setAnswers((prev) => ({ ...prev, [item.id]: next }))}
               />
             </>
           ) : null}
         </div>
-        {error ? <p className="app-error">{error}</p> : null}
+        {!currentAnswered && item?.kind === "mcq" ? (
+          <p className="meta runner-hint">Choose an answer to continue.</p>
+        ) : null}
         <div className="runner-nav">
           <button type="button" className="btn btn-secondary" disabled={index === 0} onClick={() => setIndex((n) => n - 1)}>
             Previous
           </button>
-          <button type="button" className="btn btn-primary" onClick={goNext}>
-            {index === assessment.items.length - 1 ? "Finish" : "Next"}
+          <button type="button" className="btn btn-primary" disabled={!currentAnswered} onClick={goNext}>
+            {index === activeAssessment.items.length - 1 ? "Finish" : "Next"}
           </button>
         </div>
       </section>
