@@ -177,6 +177,181 @@ export function scoreAssessment(assessment: LocalAssessment, answers: Record<str
   return Math.round((parts.reduce((sum, n) => sum + n, 0) / parts.length) * 100);
 }
 
+export const CONVERSATION_DISCLAIMER =
+  "These scores are a conversation sketch from your self-report — not a licensed psychometric, clinical diagnosis, or hiring decision.";
+
+export type TraitScore = {
+  id: string;
+  label: string;
+  score: number;
+  max: number;
+  note: string;
+};
+
+export type AssessmentInterpretation = {
+  score: number;
+  headline: string;
+  disclaimer: string;
+  traits: TraitScore[];
+};
+
+const OCEAN_META: Record<string, { label: string; note: string }> = {
+  o: { label: "Openness", note: "Appetite for new ways of doing familiar work." },
+  c: { label: "Conscientiousness", note: "Finishing what you start when energy drops." },
+  e: { label: "Extraversion", note: "Speaking up in a room of people you do not know well." },
+  a: { label: "Agreeableness", note: "Understanding a colleague before pushing your view." },
+  n: {
+    label: "Neuroticism",
+    note: "How long tight deadlines leave you unsettled. A self-report theme, not a clinical score.",
+  },
+};
+
+const PSYCHOLOGY_META: Record<string, { label: string; note: string }> = {
+  psy1: { label: "In-the-room awareness", note: "Naming what you feel while a meeting is still running." },
+  psy2: { label: "Recovery after feedback", note: "Settling after a sharp piece of feedback." },
+  psy3: { label: "Noticing quiet teammates", note: "Seeing when someone has gone quiet before they say so." },
+  psy4: { label: "Asking for help in time", note: "Asking before the work is already late." },
+  psy5: { label: "Residual conflict", note: "How much conflict stays with you after you leave the room." },
+  psy6: { label: "Evening boundaries", note: "Keeping a boundary when someone wants more of your evening." },
+};
+
+const KOLB_META: Record<string, { label: string; note: string }> = {
+  CE: { label: "Concrete experience", note: "Jumping in and feeling your way through a live case." },
+  RO: { label: "Reflective observation", note: "Watching how others handle it before you move." },
+  AC: { label: "Abstract conceptualization", note: "Thinking it through until you have a model." },
+  AE: { label: "Active experimentation", note: "Changing one concrete thing and testing it." },
+};
+
+const PLACEMENT_META: Record<string, { label: string; note: string }> = {
+  p1: { label: "Clear ownership", note: "Preference for work with a named owner and outcome." },
+  p2: { label: "Cross-team coordination", note: "Comfort coordinating across two or more teams." },
+  p3: { label: "Ambiguity friction", note: "Whether ambiguous briefs slow you more than hard briefs." },
+  p4: { label: "Coaching over doing", note: "Rather coach someone than do the task yourself." },
+};
+
+function likertToScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round((Math.min(5, Math.max(1, value)) / 5) * 100);
+}
+
+function asStoredAnswer(value: unknown): StoredAnswer | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as StoredAnswer;
+  if (row.kind === "mcq" && typeof row.value === "number") return row;
+  if (row.kind === "rank" && Array.isArray(row.ranked)) return row;
+  return null;
+}
+
+function traitsFor(assessment: LocalAssessment, answers: Record<string, StoredAnswer>): TraitScore[] {
+  if (assessment.id === "ocean") {
+    return assessment.items.flatMap((item) => {
+      if (item.kind !== "mcq") return [];
+      const key = item.id.charAt(0);
+      const meta = OCEAN_META[key];
+      const answer = answers[item.id];
+      if (!meta || answer?.kind !== "mcq") return [];
+      return [{ id: item.id, label: meta.label, score: likertToScore(answer.value), max: 100, note: meta.note }];
+    });
+  }
+
+  if (assessment.id === "psychology") {
+    return assessment.items.flatMap((item) => {
+      if (item.kind !== "mcq") return [];
+      const meta = PSYCHOLOGY_META[item.id];
+      const answer = answers[item.id];
+      if (!meta || answer?.kind !== "mcq") return [];
+      return [{ id: item.id, label: meta.label, score: likertToScore(answer.value), max: 100, note: meta.note }];
+    });
+  }
+
+  if (assessment.id === "placement") {
+    return assessment.items.flatMap((item) => {
+      if (item.kind !== "mcq") return [];
+      const meta = PLACEMENT_META[item.id];
+      const answer = answers[item.id];
+      if (!meta || answer?.kind !== "mcq") return [];
+      return [{ id: item.id, label: meta.label, score: likertToScore(answer.value), max: 100, note: meta.note }];
+    });
+  }
+
+  if (assessment.id === "kolb") {
+    const totals = new Map<string, { points: number; max: number }>();
+    for (const item of assessment.items) {
+      if (item.kind !== "rank") continue;
+      const answer = answers[item.id];
+      if (answer?.kind !== "rank") continue;
+      const n = item.options.length;
+      for (const option of item.options) {
+        const ranked = answer.ranked.find((row) => row.optionId === option.id || row.mode === option.mode);
+        const rank = ranked?.rank ?? n;
+        const points = n + 1 - rank;
+        const current = totals.get(option.mode) ?? { points: 0, max: 0 };
+        totals.set(option.mode, { points: current.points + points, max: current.max + n });
+      }
+    }
+    return [...totals.entries()].map(([mode, row]) => {
+      const meta = KOLB_META[mode] ?? { label: mode, note: "Learning-mode ranking from this screen." };
+      const score = row.max ? Math.round((row.points / row.max) * 100) : 0;
+      return { id: mode, label: meta.label, score, max: 100, note: meta.note };
+    });
+  }
+
+  return assessment.items.flatMap((item) => {
+    const answer = answers[item.id];
+    if (item.kind === "mcq" && answer?.kind === "mcq") {
+      return [
+        {
+          id: item.id,
+          label: item.prompt,
+          score: likertToScore(answer.value),
+          max: 100,
+          note: "Self-report item from this screen.",
+        },
+      ];
+    }
+    if (item.kind === "rank" && answer?.kind === "rank") {
+      const top = answer.ranked.find((row) => row.rank === 1);
+      return [
+        {
+          id: item.id,
+          label: item.prompt,
+          score: top ? 80 : 50,
+          max: 100,
+          note: top ? `You ranked “${top.label}” first.` : "Ranking saved.",
+        },
+      ];
+    }
+    return [];
+  });
+}
+
+export function interpretAssessment(
+  assessment: LocalAssessment,
+  answers: Record<string, StoredAnswer | unknown>,
+): AssessmentInterpretation {
+  const parsed: Record<string, StoredAnswer> = {};
+  for (const [key, value] of Object.entries(answers || {})) {
+    const stored = asStoredAnswer(value);
+    if (stored) parsed[key] = stored;
+  }
+  const traits = traitsFor(assessment, parsed);
+  const score = scoreAssessment(assessment, parsed);
+  const top = [...traits].sort((a, b) => b.score - a.score)[0];
+  const headline = top
+    ? `Strongest theme in this sketch: ${top.label}.`
+    : "Saved as a conversation sketch.";
+  return {
+    score,
+    headline,
+    disclaimer: CONVERSATION_DISCLAIMER,
+    traits,
+  };
+}
+
+export function assessmentTitle(id: string): string {
+  return LOCAL_ASSESSMENTS.find((item) => item.id === id)?.title ?? id;
+}
+
 export function relativeDay(iso: string, now = new Date()): string {
   const date = new Date(iso);
   const diff = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
@@ -186,22 +361,33 @@ export function relativeDay(iso: string, now = new Date()): string {
   return date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
-export function assessmentTitle(id: string): string {
-  return LOCAL_ASSESSMENTS.find((item) => item.id === id)?.title ?? id;
-}
-
 export function presentAssessmentRun(run: {
   id: string;
   assessmentId: string;
   score: number;
+  answers?: Record<string, unknown>;
+  traits?: TraitScore[];
   createdAt: Date;
 }) {
+  const assessment = LOCAL_ASSESSMENTS.find((item) => item.id === run.assessmentId);
+  const interpreted = assessment
+    ? interpretAssessment(assessment, run.answers || {})
+    : {
+        score: run.score,
+        headline: "Saved as a conversation sketch.",
+        disclaimer: CONVERSATION_DISCLAIMER,
+        traits: run.traits ?? [],
+      };
   return {
     id: run.id,
     assessmentId: run.assessmentId,
     title: assessmentTitle(run.assessmentId),
     score: run.score,
+    headline: interpreted.headline,
+    disclaimer: interpreted.disclaimer,
+    traits: run.traits?.length ? run.traits : interpreted.traits,
     createdAt: run.createdAt.toISOString(),
+    resultsPath: `/app/assessments/${run.assessmentId}/results?run=${run.id}`,
   };
 }
 

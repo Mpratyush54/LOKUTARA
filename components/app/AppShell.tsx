@@ -11,6 +11,7 @@ export type AppAccount = {
   email: string;
   name: string;
   phone?: string | null;
+  gender?: string | null;
   age?: number | null;
   city?: string | null;
   organisation?: string | null;

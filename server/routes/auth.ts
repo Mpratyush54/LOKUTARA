@@ -3,11 +3,15 @@ import { Router } from "express";
 import {
   ALL_MODULES_OFF,
   addDays,
+  applyProfilePatch,
   presentAccount,
   type AccountRecord,
 } from "../../lib/access/billing";
+import { EMPTY_IDENTITY, isEmail, parseProfilePatch } from "../../lib/access/profile";
 import { hashPassword, verifyPassword } from "../../lib/access/password";
 import { ACCOUNT_NOTICE_VERSION } from "../../lib/legal/compliance";
+import { applyProfilePatch } from "../../lib/access/billing";
+import { EMPTY_IDENTITY, parseProfilePatch } from "../../lib/access/profile";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { APP_COOKIE, appCookieOptions, readAppToken, type AppRequest } from "../middleware/appAuth";
 import type {
@@ -19,10 +23,6 @@ import type {
   RateLimiter,
   ThreadStore,
 } from "../stores/memory";
-
-function isEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
 
 function mintToken(): string {
   return randomBytes(32).toString("hex");
@@ -105,16 +105,19 @@ export function createAuthRouter(deps: {
       const account = await deps.accounts.getById(session.accountId);
       if (!account) throw new HttpError(401, "unauthorized", "Sign in to update your profile");
 
-      const body = req.body || {};
-      const name = asTrimmed(body.name);
-      if (name.length < 2 || name.length > 80) throw new HttpError(400, "invalid", "Enter your name");
-      account.name = name;
-      account.phone = parsePhone(body.phone);
-      account.age = parseAge(body.age);
-      account.city = parseCity(body.city);
-      account.organisation = parseOrganisation(body.organisation);
-      await deps.accounts.update(account);
-      res.json({ ok: true, account: presentAccount(account) });
+      const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+      const parsed = parseProfilePatch(body);
+      if (!parsed.ok) throw new HttpError(400, "invalid", parsed.message);
+      if (parsed.value.email && parsed.value.email !== account.email.toLowerCase()) {
+        const taken = await deps.accounts.getByEmail(parsed.value.email);
+        if (taken && taken.id !== account.id) {
+          throw new HttpError(409, "exists", "An account with that email already exists");
+        }
+      }
+      let next = applyProfilePatch(account, parsed.value);
+      if ("organisation" in body) next = { ...next, organisation: parseOrganisation(body.organisation) };
+      await deps.accounts.update(next);
+      res.json({ ok: true, account: presentAccount(next) });
     }),
   );
 
@@ -234,16 +237,18 @@ export function createAuthRouter(deps: {
         id: `acc_${randomBytes(8).toString("hex")}`,
         email,
         name,
-        phone,
-        age,
-        city,
-        organisation,
         passwordHash: await hashPassword(password),
         plan: settings.autoTrialOnSignup ? "trial" : "none",
         trialEndsAt: settings.autoTrialOnSignup ? addDays(now, settings.defaultTrialDays) : null,
         modules: settings.autoTrialOnSignup ? { ...settings.trialModules } : { ...ALL_MODULES_OFF },
         seats: 1,
         createdAt: now,
+        ...EMPTY_IDENTITY,
+        phone,
+        age,
+        city,
+        organisation,
+        gender: null,
         termsAcceptedAt: now,
         privacyNoticeVersion: ACCOUNT_NOTICE_VERSION,
       };

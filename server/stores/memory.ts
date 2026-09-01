@@ -7,7 +7,8 @@ import {
   type BillingSettings,
 } from "../../lib/access/billing";
 import type { Invoice } from "../../lib/billing/invoices";
-import type { LocalAnswer, LocalThread } from "../../lib/product/workspace";
+import { EMPTY_IDENTITY } from "../../lib/access/profile";
+import type { LocalAnswer, LocalThread, TraitScore } from "../../lib/product/workspace";
 
 export type StoredLead = ValidLead & {
   id: string;
@@ -89,6 +90,7 @@ export type AssessmentRun = {
   score: number;
   consentedAt: Date;
   noticeVersion: string;
+  traits: TraitScore[];
   createdAt: Date;
 };
 
@@ -243,9 +245,10 @@ export function createMemoryStores() {
 
   const accountStore: AccountStore = {
     async create(account) {
-      accounts.set(account.id, account);
-      accountsByEmail.set(account.email.toLowerCase(), account.id);
-      return account;
+      const stored = { ...EMPTY_IDENTITY, ...account };
+      accounts.set(stored.id, stored);
+      accountsByEmail.set(stored.email.toLowerCase(), stored.id);
+      return stored;
     },
     async getByEmail(email) {
       const id = accountsByEmail.get(email.trim().toLowerCase());
@@ -258,9 +261,13 @@ export function createMemoryStores() {
       return [...accounts.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
     async update(account) {
-      accounts.set(account.id, account);
+      const previous = accounts.get(account.id);
+      if (previous && previous.email.toLowerCase() !== account.email.toLowerCase()) {
+        accountsByEmail.delete(previous.email.toLowerCase());
+      }
+      accounts.set(account.id, { ...EMPTY_IDENTITY, ...account });
       accountsByEmail.set(account.email.toLowerCase(), account.id);
-      return account;
+      return accounts.get(account.id)!;
     },
     async delete(id) {
       const account = accounts.get(id);
@@ -356,7 +363,7 @@ export function createMemoryStores() {
 
   const assessmentRunStore: AssessmentRunStore = {
     async insert(run) {
-      assessmentRuns.push(run);
+      assessmentRuns.push({ ...run, traits: run.traits ?? [] });
       return run;
     },
     async get(id) {

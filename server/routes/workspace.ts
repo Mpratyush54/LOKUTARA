@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { canPostCommunityAnswer, communityRoleOf } from "../../lib/access/billing";
-import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, presentAssessmentRun, scoreAssessment, type StoredAnswer } from "../../lib/product/workspace";
+import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, interpretAssessment, presentAssessmentRun, type StoredAnswer } from "../../lib/product/workspace";
 import { reportForRun } from "../../lib/product/report";
 import { buildAssessmentReportPdf } from "../../lib/product/reportPdf";
 import { ASSESSMENT_NOTICE_VERSION } from "../../lib/legal/compliance";
@@ -144,6 +144,36 @@ export function createWorkspaceRouter(deps: {
     }),
   );
 
+  router.get(
+    "/assessments/:id/results",
+    requireModule("assessments"),
+    asyncHandler(async (req: AppRequest, res) => {
+      const assessment = LOCAL_ASSESSMENTS.find((item) => item.id === req.params.id);
+      if (!assessment) throw new HttpError(404, "not_found", "Unknown assessment");
+      const runs = (await deps.assessmentRuns.listByAccount(req.accountId!)).filter(
+        (run) => run.assessmentId === assessment.id,
+      );
+      const presented = runs.map(presentAssessmentRun);
+      res.json({
+        assessment: { id: assessment.id, title: assessment.title },
+        latest: presented[0] ?? null,
+        runs: presented,
+      });
+    }),
+  );
+
+  router.get(
+    "/runs/:runId",
+    requireModule("assessments"),
+    asyncHandler(async (req: AppRequest, res) => {
+      const run = await deps.assessmentRuns.get(req.params.runId);
+      if (!run || run.accountId !== req.accountId) {
+        throw new HttpError(404, "not_found", "Result not found");
+      }
+      res.json({ run: presentAssessmentRun(run) });
+    }),
+  );
+
   router.post(
     "/assessments/:id/submit",
     requireModule("assessments"),
@@ -186,12 +216,14 @@ export function createWorkspaceRouter(deps: {
           parsed[item.id] = { kind: "rank", ranked };
         }
       }
+      const interpreted = interpretAssessment(assessment, parsed);
       const run = await deps.assessmentRuns.insert({
         id: `run_${randomBytes(8).toString("hex")}`,
         accountId: req.accountId!,
         assessmentId: assessment.id,
         answers: parsed,
-        score: scoreAssessment(assessment, parsed),
+        score: interpreted.score,
+        traits: interpreted.traits,
         consentedAt: new Date(),
         noticeVersion: ASSESSMENT_NOTICE_VERSION,
         createdAt: new Date(),

@@ -5,6 +5,7 @@ import type { AppAccount } from "./AppShell";
 import { jsonFetch, useAppAccount, useSetAppAccount } from "./AppShell";
 import { CheckoutButton } from "./CheckoutButton";
 import { showAppToast } from "./AppToast";
+import { GENDER_OPTIONS } from "@/lib/access/profile";
 
 export function AccountPanel() {
   const fromShell = useAppAccount();
@@ -14,6 +15,7 @@ export function AccountPanel() {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [gender, setGender] = useState("");
   const [age, setAge] = useState("");
   const [city, setCity] = useState("");
   const [organisation, setOrganisation] = useState("");
@@ -36,6 +38,7 @@ export function AccountPanel() {
     if (!account || hydrated) return;
     setName(account.name || "");
     setPhone(account.phone || "");
+    setGender(account.gender || "");
     setAge(account.age != null ? String(account.age) : "");
     setCity(account.city || "");
     setOrganisation(account.organisation || "");
@@ -51,6 +54,7 @@ export function AccountPanel() {
       body: JSON.stringify({
         name,
         phone,
+        gender: gender || null,
         age: Number(age),
         city,
         organisation: organisation.trim() || undefined,
@@ -98,6 +102,7 @@ export function AccountPanel() {
   }
 
   const initial = (account.name || "?").trim().charAt(0).toUpperCase();
+  const genderLabel = GENDER_OPTIONS.find((option) => option.id === account.gender)?.label ?? "—";
 
   return (
     <section className="module-stack profile-page">
@@ -116,7 +121,7 @@ export function AccountPanel() {
         <form className="profile-card dash-in delay-1" onSubmit={onSave}>
           <div className="profile-card-head">
             <h2>Your details</h2>
-            <p className="meta">Name, phone, age, city, and organisation used on this account.</p>
+            <p className="meta">Name, phone, gender, age, city, and organisation used on this account.</p>
           </div>
           <div className="field">
             <label htmlFor="profile-name">Name</label>
@@ -128,19 +133,30 @@ export function AccountPanel() {
               <input className="input" id="profile-phone" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required minLength={8} />
             </div>
             <div className="field">
-              <label htmlFor="profile-age">Age</label>
-              <input className="input" id="profile-age" type="number" min={18} max={120} value={age} onChange={(e) => setAge(e.target.value)} required />
+              <label htmlFor="profile-gender">Gender</label>
+              <select className="input" id="profile-gender" value={gender} onChange={(e) => setGender(e.target.value)}>
+                <option value="">Prefer not to say now</option>
+                {GENDER_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="form-grid">
             <div className="field">
+              <label htmlFor="profile-age">Age</label>
+              <input className="input" id="profile-age" type="number" min={18} max={120} value={age} onChange={(e) => setAge(e.target.value)} required />
+            </div>
+            <div className="field">
               <label htmlFor="profile-city">City</label>
               <input className="input" id="profile-city" value={city} onChange={(e) => setCity(e.target.value)} required minLength={2} />
             </div>
-            <div className="field">
-              <label htmlFor="profile-org">Organisation</label>
-              <input className="input" id="profile-org" value={organisation} onChange={(e) => setOrganisation(e.target.value)} placeholder="Optional" />
-            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="profile-org">Organisation</label>
+            <input className="input" id="profile-org" value={organisation} onChange={(e) => setOrganisation(e.target.value)} placeholder="Optional" />
           </div>
           <div className="paywall-actions">
             <button type="submit" className="btn btn-primary" disabled={saving}>
@@ -165,6 +181,10 @@ export function AccountPanel() {
             <div>
               <dt>Phone</dt>
               <dd>{account.phone || "—"}</dd>
+            </div>
+            <div>
+              <dt>Gender</dt>
+              <dd>{genderLabel}</dd>
             </div>
             <div>
               <dt>Age</dt>
