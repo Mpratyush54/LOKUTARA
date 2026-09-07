@@ -22,6 +22,7 @@ import type {
   ExperimentConfigStore,
   InvoiceStore,
   LeadStore,
+  PromoStore,
   RateLimiter,
   SessionStore,
   StoreBackend,
@@ -58,6 +59,7 @@ export type ApiDeps = {
   threads?: ThreadStore;
   assessmentRuns?: AssessmentRunStore;
   invoices?: InvoiceStore;
+  promos?: PromoStore;
   razorpay?: RazorpayClient;
   razorpayWebhookSecret?: string | null;
 };
@@ -74,6 +76,7 @@ export function createApiApp(deps: ApiDeps): Express {
   const threads = deps.threads ?? fallback.threadStore;
   const assessmentRuns = deps.assessmentRuns ?? fallback.assessmentRunStore;
   const invoices = deps.invoices ?? fallback.invoiceStore;
+  const promos = deps.promos ?? fallback.promoStore;
 
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -94,6 +97,7 @@ export function createApiApp(deps: ApiDeps): Express {
     createRazorpayWebhookRouter({
       invoices,
       accounts,
+      promos,
       webhookSecret: deps.razorpayWebhookSecret ?? null,
     }),
   );
@@ -188,13 +192,14 @@ export function createApiApp(deps: ApiDeps): Express {
       sessions: appSessions,
       billing,
       invoices,
+      promos,
       razorpay: deps.razorpay,
       rateLimiter: deps.rateLimiter,
     }),
   );
   app.use(
     "/api/workspace",
-    createWorkspaceRouter({ accounts, sessions: appSessions, threads, assessmentRuns }),
+    createWorkspaceRouter({ accounts, sessions: appSessions, threads, assessmentRuns, billing }),
   );
   app.use(
     "/api/admin",
@@ -206,10 +211,12 @@ export function createApiApp(deps: ApiDeps): Express {
       adminEmail: deps.adminEmail,
       product: deps.product,
       accounts,
+      sessions: appSessions,
       billing,
       threads,
       assessmentRuns,
       invoices,
+      promos,
       razorpay: deps.razorpay,
       rateLimiter: deps.rateLimiter,
     }),

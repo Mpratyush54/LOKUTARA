@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { usePathname } from "next/navigation";
 import { AppShell } from "./AppShell";
 
 vi.mock("next/link", () => ({
@@ -13,12 +14,13 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/app",
+  usePathname: vi.fn(() => "/app"),
 }));
 
 describe("AppShell", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
+    vi.mocked(usePathname).mockReturnValue("/app");
   });
 
   it("shows a paywall when there is no session", async () => {
@@ -82,7 +84,10 @@ describe("AppShell", () => {
     expect(screen.getAllByRole("link", { name: "Billing" })[0]).toHaveAttribute("href", "/app/billing");
     expect(screen.getAllByRole("link", { name: "Profile" })[0]).toHaveAttribute("href", "/app/account");
     expect(screen.getByTestId("upgrade-banner")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /upgrade now/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /upgrade now/i })[0]).toHaveAttribute(
+      "href",
+      "/app/billing/checkout?sku=app_access",
+    );
     expect(screen.queryByRole("link", { name: /^tests$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^forum$/i })).not.toBeInTheDocument();
   });
@@ -115,11 +120,46 @@ describe("AppShell", () => {
       </AppShell>,
     );
     expect(await screen.findByTestId("paywall")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /upgrade now/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /upgrade now/i })).toHaveAttribute(
+      "href",
+      "/app/billing/checkout?sku=app_access",
+    );
     expect(screen.getByRole("link", { name: /see plans/i })).toHaveAttribute("href", "/app/billing");
     expect(screen.getByRole("link", { name: /get in touch/i })).toHaveAttribute("href", "/#contact");
     expect(screen.queryByRole("link", { name: /talk to founder/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /start free trial/i })).not.toBeInTheDocument();
     expect(screen.queryByText("Secret module")).not.toBeInTheDocument();
+  });
+
+  it("lets a locked-out account open the checkout page", async () => {
+    vi.mocked(usePathname).mockReturnValue("/app/billing/checkout");
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        account: {
+          id: "acc_1",
+          email: "asha@lokutara.test",
+          name: "Asha",
+          seats: 1,
+          createdAt: "2026-08-01T00:00:00.000Z",
+          access: {
+            status: "none",
+            plan: "none",
+            trialEndsAt: null,
+            daysLeft: null,
+            modules: { assessments: false, community: false },
+            canEnterApp: false,
+          },
+        },
+      }),
+    } as Response);
+    render(
+      <AppShell>
+        <p>Checkout content</p>
+      </AppShell>,
+    );
+    expect(await screen.findByText("Checkout content")).toBeInTheDocument();
+    expect(screen.queryByTestId("paywall")).not.toBeInTheDocument();
   });
 });

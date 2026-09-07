@@ -1,0 +1,33 @@
+name: Sync main with frontend & backend
+
+on:
+  push:
+    branches:
+      - frontend
+      - backend
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch all branches
+        run: git fetch origin main || echo "main not found"
+
+      - name: Merge current branch into main
+        run: |
+          BRANCH=$(echo "${GITHUB_REF#refs/heads/}")
+          echo "Merging ${BRANCH} into main..."
+          git checkout main || git checkout -b main
+          git merge --no-edit --strategy-option theirs origin/${BRANCH} || true
+          git push origin main

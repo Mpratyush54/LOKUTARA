@@ -6,9 +6,11 @@ import { showAppToast } from "./AppToast";
 export function DownloadReportButton({
   runId,
   className = "btn btn-secondary",
+  children,
 }: {
   runId: string;
   className?: string;
+  children?: React.ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
 
@@ -34,7 +36,7 @@ export function DownloadReportButton({
 
   return (
     <button type="button" className={className} disabled={busy} onClick={() => void download()}>
-      {busy ? "Preparing PDF…" : "Download PDF"}
+      {busy ? "Preparing PDF…" : (children ?? "Download PDF")}
     </button>
   );
 }

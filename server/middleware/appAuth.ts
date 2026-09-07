@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { canUseModule, resolveAccess, type ProductModule } from "../../lib/access/billing";
+import { canUseModule, isBanned, resolveAccess, type ProductModule } from "../../lib/access/billing";
 import { HttpError } from "./errors";
 import type { AccountStore, AppSessionStore } from "../stores/memory";
 
@@ -39,6 +39,10 @@ export function requireAppSession(deps: { accounts: AccountStore; sessions: AppS
       if (!session) throw new HttpError(401, "unauthorized", "Session expired");
       const account = await deps.accounts.getById(session.accountId);
       if (!account) throw new HttpError(401, "unauthorized", "Account missing");
+      if (isBanned(account)) {
+        await deps.sessions.delete(token).catch(() => undefined);
+        throw new HttpError(403, "banned", "This account has been banned. Get in touch if this is a mistake.");
+      }
       if (typeof account.age === "number" && account.age < 18) {
         throw new HttpError(403, "adult_required", "Lokutara accounts are for adults aged 18 or older");
       }
@@ -47,6 +51,24 @@ export function requireAppSession(deps: { accounts: AccountStore; sessions: AppS
       next();
     } catch (error) {
       next(error);
+    }
+  };
+}
+
+export function optionalAppSession(deps: { accounts: AccountStore; sessions: AppSessionStore }) {
+  return async (req: AppRequest, _res: Response, next: NextFunction) => {
+    try {
+      const token = readAppToken(req);
+      if (!token) return next();
+      const session = await deps.sessions.get(token);
+      if (!session) return next();
+      const account = await deps.accounts.getById(session.accountId);
+      if (!account || isBanned(account)) return next();
+      req.accountId = account.id;
+      req.account = account;
+      next();
+    } catch {
+      next();
     }
   };
 }

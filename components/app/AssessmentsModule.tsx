@@ -7,6 +7,8 @@ import type { AssessmentItem, LocalAssessment, RankItem, StoredAnswer } from "@/
 import { jsonFetch } from "./AppShell";
 import { showAppToast } from "./AppToast";
 import { DownloadReportButton } from "./DownloadReportButton";
+import { ScoreDial } from "./AssessmentReport";
+import { useScrollLock } from "@/hooks/useScrollLock";
 
 type CatalogItem = {
   id: string;
@@ -30,6 +32,8 @@ export function AssessmentsCatalog() {
   const [search, setSearch] = useState("");
   const [track, setTrack] = useState<"all" | "psychology" | "placement">("all");
   const [tab, setTab] = useState<"recommended" | "all">("all");
+  const [resultsOpen, setResultsOpen] = useState(false);
+  useScrollLock(resultsOpen);
 
   useEffect(() => {
     void (async () => {
@@ -53,13 +57,16 @@ export function AssessmentsCatalog() {
   }, []);
 
   const filtered = useMemo(() => {
-    return items.filter((item) => {
-      const hay = `${item.title} ${item.copy}`.toLowerCase();
-      const matchesSearch = !search || hay.includes(search.toLowerCase());
-      const matchesTrack = track === "all" || item.track === track;
-      const matchesTab = tab === "all" || item.recommended;
-      return matchesSearch && matchesTrack && matchesTab;
-    });
+    // Stable order: recommended first, catalogue order otherwise — never shuffled.
+    return items
+      .filter((item) => {
+        const hay = `${item.title} ${item.copy}`.toLowerCase();
+        const matchesSearch = !search || hay.includes(search.toLowerCase());
+        const matchesTrack = track === "all" || item.track === track;
+        const matchesTab = tab === "all" || item.recommended;
+        return matchesSearch && matchesTrack && matchesTab;
+      })
+      .sort((a, b) => Number(b.recommended) - Number(a.recommended));
   }, [items, search, track, tab]);
 
   if (error) {
@@ -84,13 +91,48 @@ export function AssessmentsCatalog() {
 
   return (
     <div className="module-stack">
-      <header>
-        <p className="eyebrow">Measure</p>
-        <h1>Assessments</h1>
-        <p className="lead">
-          Catalog of workshop screens: search, recommended, MCQ, and ranking. Open a report after you finish — results stay in this workspace.
-        </p>
+      <header className="assess-head">
+        <div>
+          <p className="eyebrow">Measure</p>
+          <h1>Assessments</h1>
+          <p className="lead">
+            Catalog of workshop screens: search, recommended, MCQ, and ranking. Open a report after you finish — results stay in this workspace.
+          </p>
+        </div>
+        {runs.length ? (
+          <button type="button" className="btn btn-secondary" onClick={() => setResultsOpen(true)}>
+            Show your results ({runs.length})
+          </button>
+        ) : null}
       </header>
+      {resultsOpen ? (
+        <div className="overlay open" onClick={(e) => e.target === e.currentTarget && setResultsOpen(false)}>
+          <div className="modal modal-wide" role="dialog" aria-label="My results">
+            <button type="button" className="modal-close" onClick={() => setResultsOpen(false)} aria-label="Close">
+              ×
+            </button>
+            <p className="eyebrow">Results</p>
+            <h2>Every test you have taken</h2>
+            <ul className="report-list" style={{ marginTop: 16 }}>
+              {runs.map((run) => (
+                <li key={run.id} className="report-list-card">
+                  <ScoreDial score={run.score} size={64} />
+                  <div className="report-list-meta">
+                    <strong>{run.title || run.assessmentId}</strong>
+                    <p className="meta">{new Date(run.createdAt).toLocaleString("en-IN")}</p>
+                    <div className="report-list-actions">
+                      <Link className="btn btn-primary" href={`/app/assessments/runs/${run.id}`}>
+                        View report
+                      </Link>
+                      <DownloadReportButton runId={run.id} />
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
       <div className="community-filters">
         <input
           className="input"
@@ -133,21 +175,6 @@ export function AssessmentsCatalog() {
         ))}
       </div>
       {!filtered.length ? <p className="product-empty">No assessments match that filter.</p> : null}
-      {runs.length ? (
-        <section>
-          <h2 className="admin-h2">Your reports</h2>
-          <ul className="run-list">
-            {runs.slice(0, 8).map((run) => (
-              <li key={run.id}>
-                <Link href={`/app/assessments/runs/${run.id}`} className="run-link">
-                  <span>{run.title || run.assessmentId}</span>
-                  <span className="num">{run.score}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
     </div>
   );
 }

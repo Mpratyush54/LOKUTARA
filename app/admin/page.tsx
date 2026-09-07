@@ -1,12 +1,5 @@
-import type { Metadata } from "next";
-import { AdminDashboard } from "@/components/admin/AdminDashboard";
-import "./admin.css";
-
-export const metadata: Metadata = {
-  title: "Admin · Lokutara",
-  robots: { index: false, follow: false },
-};
+import { redirect } from "next/navigation";
 
 export default function AdminPage() {
-  return <AdminDashboard />;
+  redirect("/admin/overview");
 }

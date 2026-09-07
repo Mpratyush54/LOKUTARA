@@ -8,11 +8,12 @@ afterEach(() => {
 });
 
 describe("NeedGuide", () => {
-  it("starts at company size and advances to who", () => {
+  it("starts at company size and advances to who on slider release", () => {
     render(<NeedGuide onBookDiscovery={() => {}} onAskPsychologist={() => {}} />);
     expect(screen.getByRole("heading", { name: /company size/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/company size in employees/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /50–500 people/i }));
+    const slider = screen.getByLabelText(/company size in employees/i);
+    fireEvent.change(slider, { target: { value: "120" } });
+    fireEvent.pointerUp(slider);
     expect(screen.getByRole("heading", { name: /who are you looking to support/i })).toBeInTheDocument();
     expect(window.location.search).toMatch(/gstep=who/);
     expect(window.location.search).toMatch(/size=50-500/);
@@ -20,16 +21,19 @@ describe("NeedGuide", () => {
 
   it("treats the slider as the same size question", () => {
     render(<NeedGuide onBookDiscovery={() => {}} onAskPsychologist={() => {}} />);
-    fireEvent.change(screen.getByLabelText(/company size in employees/i), { target: { value: "40" } });
+    const slider = screen.getByLabelText(/company size in employees/i);
+    fireEvent.change(slider, { target: { value: "40" } });
     expect(window.location.search).toMatch(/headcount=40/);
     expect(window.location.search).toMatch(/size=1-49/);
-    fireEvent.click(screen.getByRole("button", { name: /under 50 people/i }));
+    fireEvent.pointerUp(slider);
     expect(screen.getByRole("heading", { name: /who are you looking to support/i })).toBeInTheDocument();
   });
 
   it("routes an individual to the contact step", () => {
     render(<NeedGuide onBookDiscovery={() => {}} onAskPsychologist={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /under 50 people/i }));
+    const slider = screen.getByLabelText(/company size in employees/i);
+    fireEvent.change(slider, { target: { value: "40" } });
+    fireEvent.pointerUp(slider);
     fireEvent.click(screen.getByRole("button", { name: /i’m an individual looking for an answer/i }));
     expect(screen.getByRole("heading", { name: /where should we send the recommendation/i })).toBeInTheDocument();
     expect(window.location.search).toMatch(/gstep=contact/);

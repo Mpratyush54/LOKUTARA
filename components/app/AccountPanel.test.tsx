@@ -40,6 +40,9 @@ describe("AccountPanel", () => {
     expect(screen.getByText("Bengaluru")).toBeInTheDocument();
     expect(screen.getByText("Lokutara")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /upgrade now/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /upgrade now/i })).toHaveAttribute(
+      "href",
+      "/app/billing/checkout?sku=app_access",
+    );
   });
 });

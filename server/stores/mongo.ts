@@ -3,6 +3,7 @@ import type { StoredAnalyticsEvent } from "../../lib/tracking/events";
 import type { AccountRecord, BillingSettings, ModuleFlags, Plan } from "../../lib/access/billing";
 import { DEFAULT_BILLING_SETTINGS } from "../../lib/access/billing";
 import type { Invoice } from "../../lib/billing/invoices";
+import type { Promo } from "../../lib/billing/promos";
 import { EMPTY_IDENTITY, identityFrom, isGenderIdentity } from "../../lib/access/profile";
 import type { LocalThread, TraitScore } from "../../lib/product/workspace";
 import type {
@@ -21,6 +22,7 @@ import type {
   StoredLead,
   StoredSession,
   StoredVisitor,
+  PromoStore,
   ThreadStore,
   VisitorStore,
 } from "./memory";
@@ -134,6 +136,8 @@ const AccountSchema = new mongoose.Schema(
     },
     seats: { type: Number, default: 1 },
     communityRole: { type: String, enum: ["student", "specialist", "admin"], default: "student" },
+    bannedAt: { type: Date, default: null },
+    banReason: { type: String, default: null },
     gender: { type: String, default: null },
     termsAcceptedAt: Date,
     privacyNoticeVersion: String,
@@ -165,6 +169,7 @@ const BillingSettingsSchema = new mongoose.Schema(
     gstin: { type: String, default: "" },
     address: { type: String, default: "" },
     gstRate: { type: Number, default: 18 },
+    blockedWords: { type: [String], default: [] },
   },
   { collection: "billing_settings" },
 );
@@ -178,10 +183,22 @@ const InvoiceSchema = new mongoose.Schema(
     customerEmail: { type: String, index: true },
     customerPhone: String,
     organisation: String,
-    sku: String,
-    label: String,
-    qty: { type: Number, default: 1 },
-    unitAmountPaise: Number,
+    customerGstin: { type: String, default: null },
+    supplyState: { type: String, default: null },
+    lines: [
+      {
+        sku: String,
+        label: String,
+        qty: { type: Number, default: 1 },
+        unitAmountPaise: Number,
+        gstRate: { type: Number, default: 18 },
+        subtotalPaise: Number,
+        gstPaise: Number,
+        totalPaise: Number,
+      },
+    ],
+    discountPaise: { type: Number, default: 0 },
+    promoCode: { type: String, default: null, index: true, sparse: true },
     gstRate: { type: Number, default: 18 },
     subtotalPaise: Number,
     gstPaise: Number,
@@ -225,6 +242,24 @@ const ThreadSchema = new mongoose.Schema(
     ],
   },
   { collection: "app_threads" },
+);
+
+const PromoSchema = new mongoose.Schema(
+  {
+    id: { type: String, unique: true, index: true },
+    code: { type: String, unique: true, index: true },
+    kind: { type: String, enum: ["percent", "flat"], default: "percent" },
+    value: { type: Number, default: 10 },
+    maxDiscountRupees: { type: Number, default: null },
+    maxUses: { type: Number, default: null },
+    usedCount: { type: Number, default: 0 },
+    firstTimeOnly: { type: Boolean, default: false },
+    active: { type: Boolean, default: true, index: true },
+    expiresAt: { type: Date, default: null },
+    note: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now, index: true },
+  },
+  { collection: "promos" },
 );
 
 const AssessmentRunSchema = new mongoose.Schema(
@@ -271,6 +306,7 @@ export const AssessmentRunModel = (
   mongoose.models.AppAssessmentRun || mongoose.model("AppAssessmentRun", AssessmentRunSchema)
 ) as LooseMongoModel;
 export const InvoiceModel = (mongoose.models.Invoice || mongoose.model("Invoice", InvoiceSchema)) as LooseMongoModel;
+export const PromoModel = (mongoose.models.Promo || mongoose.model("Promo", PromoSchema)) as LooseMongoModel;
 
 export async function connectMongo(uri: string): Promise<void> {
   if (mongoose.connection.readyState === 1) return;
@@ -296,6 +332,7 @@ export async function ensureMongoIndexes(): Promise<void> {
     ThreadModel.syncIndexes(),
     AssessmentRunModel.syncIndexes(),
     InvoiceModel.syncIndexes(),
+    PromoModel.syncIndexes(),
   ]);
 }
 
@@ -383,6 +420,40 @@ export const mongoLeadStore: LeadStore = {
       privacyNoticeVersion: (row.privacyNoticeVersion as string) || "legacy",
       createdAt: new Date(row.createdAt as Date),
     }));
+  },
+  async query(input) {
+    const filter: Record<string, unknown> = {};
+    if (input.type) filter.type = input.type;
+    const q = (input.q || "").trim();
+    if (q) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      filter.$or = [{ name: rx }, { email: rx }, { phone: rx }, { organisation: rx }, { role: rx }];
+    }
+    const limit = Math.max(1, Math.min(input.limit || 25, 100));
+    const offset = Math.max(0, input.offset || 0);
+    const [rows, total] = await Promise.all([
+      LeadModel.find(filter).sort({ createdAt: -1 }).skip(offset).limit(limit).lean(),
+      LeadModel.countDocuments(filter),
+    ]);
+    return {
+      rows: rows.map((row) => ({
+        id: row.id as string,
+        type: row.type as StoredLead["type"],
+        name: row.name as string,
+        email: row.email as string,
+        phone: row.phone as string,
+        role: (row.role as string | null) ?? null,
+        organisation: (row.organisation as string | null) ?? null,
+        sizeBand: (row.sizeBand as StoredLead["sizeBand"]) ?? null,
+        preferredTime: (row.preferredTime as string | null) ?? null,
+        visitorId: (row.visitorId as string | null) ?? null,
+        consentedAt: new Date((row.consentedAt as Date) || row.createdAt || Date.now()),
+        adultConfirmedAt: new Date((row.adultConfirmedAt as Date) || row.createdAt || Date.now()),
+        privacyNoticeVersion: (row.privacyNoticeVersion as string) || "legacy",
+        createdAt: new Date(row.createdAt as Date),
+      })),
+      total,
+    };
   },
 };
 
@@ -519,6 +590,8 @@ function mapAccount(row: Record<string, unknown>): AccountRecord {
       row.communityRole === "specialist" || row.communityRole === "admin" ? row.communityRole : "student",
     termsAcceptedAt: row.termsAcceptedAt ? new Date(row.termsAcceptedAt as Date) : null,
     privacyNoticeVersion: (row.privacyNoticeVersion as string | null) ?? null,
+    bannedAt: row.bannedAt ? new Date(row.bannedAt as Date) : null,
+    banReason: (row.banReason as string | null) ?? null,
     createdAt: new Date((row.createdAt as Date) || Date.now()),
     ...EMPTY_IDENTITY,
     ...identity,
@@ -576,7 +649,7 @@ export const mongoAppSessionStore: AppSessionStore = {
 export const mongoBillingSettingsStore: BillingSettingsStore = {
   async get() {
     const row = await BillingSettingsModel.findOne({ key: "default" }).lean();
-    if (!row) return { ...DEFAULT_BILLING_SETTINGS, trialModules: { ...DEFAULT_BILLING_SETTINGS.trialModules } };
+    if (!row) return { ...DEFAULT_BILLING_SETTINGS, trialModules: { ...DEFAULT_BILLING_SETTINGS.trialModules }, blockedWords: [] };
     return {
       autoTrialOnSignup: Boolean(row.autoTrialOnSignup ?? true),
       defaultTrialDays: Number(row.defaultTrialDays || 14),
@@ -588,6 +661,7 @@ export const mongoBillingSettingsStore: BillingSettingsStore = {
       gstin: typeof row.gstin === "string" ? row.gstin : "",
       address: typeof row.address === "string" ? row.address : "",
       gstRate: Number.isFinite(Number(row.gstRate)) ? Number(row.gstRate) : DEFAULT_BILLING_SETTINGS.gstRate,
+      blockedWords: Array.isArray(row.blockedWords) ? (row.blockedWords as string[]).filter((w) => typeof w === "string") : [],
     };
   },
   async save(settings: BillingSettings) {
@@ -664,6 +738,22 @@ export const mongoThreadStore: ThreadStore = {
     await thread.save();
     return mapThread(thread.toObject() as Record<string, unknown>);
   },
+  async deleteThread(id) {
+    const result = await ThreadModel.deleteOne({ id });
+    return (result.deletedCount ?? 0) > 0;
+  },
+  async deleteAnswer(threadId, answerId) {
+    const row = await ThreadModel.findOneAndUpdate(
+      { id: threadId },
+      { $pull: { answers: { id: answerId } } },
+      { new: true },
+    ).lean();
+    if (!row) {
+      const exists = await ThreadModel.findOne({ id: threadId }).lean();
+      return exists ? mapThread(exists as Record<string, unknown>) : null;
+    }
+    return mapThread(row as Record<string, unknown>);
+  },
   async anonymizeByAccount(accountId) {
     await ThreadModel.updateMany(
       { authorId: accountId },
@@ -689,6 +779,50 @@ export const mongoThreadStore: ThreadStore = {
       }
       await row.save();
     }
+  },
+};
+
+function mapPromo(row: Record<string, unknown>): Promo {
+  return {
+    id: row.id as string,
+    code: row.code as string,
+    kind: row.kind === "flat" ? "flat" : "percent",
+    value: Number(row.value || 0),
+    maxDiscountRupees: row.maxDiscountRupees == null ? null : Number(row.maxDiscountRupees),
+    maxUses: row.maxUses == null ? null : Number(row.maxUses),
+    usedCount: Number(row.usedCount || 0),
+    firstTimeOnly: Boolean(row.firstTimeOnly),
+    active: row.active !== false,
+    expiresAt: row.expiresAt ? new Date(row.expiresAt as Date) : null,
+    note: (row.note as string) || null,
+    createdAt: new Date((row.createdAt as Date) || Date.now()),
+  };
+}
+
+export const mongoPromoStore: PromoStore = {
+  async list() {
+    const rows = await PromoModel.find().sort({ createdAt: -1 }).lean();
+    return rows.map((row) => mapPromo(row as Record<string, unknown>));
+  },
+  async getByCode(code) {
+    const row = await PromoModel.findOne({ code: code.trim().toUpperCase() }).lean();
+    return row ? mapPromo(row as Record<string, unknown>) : null;
+  },
+  async upsert(promo) {
+    await PromoModel.findOneAndUpdate({ code: promo.code }, promo, { upsert: true, new: true });
+    return promo;
+  },
+  async incrementUse(code) {
+    const row = await PromoModel.findOneAndUpdate(
+      { code: code.trim().toUpperCase() },
+      { $inc: { usedCount: 1 } },
+      { new: true },
+    ).lean();
+    return row ? mapPromo(row as Record<string, unknown>) : null;
+  },
+  async remove(code) {
+    const result = await PromoModel.deleteOne({ code: code.trim().toUpperCase() });
+    return (result.deletedCount ?? 0) > 0;
   },
 };
 
@@ -736,6 +870,20 @@ export const mongoAssessmentRunStore: AssessmentRunStore = {
 };
 
 function mapInvoice(row: Record<string, unknown>): Invoice {
+  const rawLines = Array.isArray(row.lines) ? row.lines : [];
+  const lines = rawLines.map((raw) => {
+    const line = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    return {
+      sku: line.sku as Invoice["lines"][number]["sku"],
+      label: (line.label as string) || "",
+      qty: Number(line.qty || 1),
+      unitAmountPaise: Number(line.unitAmountPaise || 0),
+      gstRate: Number(line.gstRate || 0),
+      subtotalPaise: Number(line.subtotalPaise || 0),
+      gstPaise: Number(line.gstPaise || 0),
+      totalPaise: Number(line.totalPaise || 0),
+    };
+  });
   return {
     id: row.id as string,
     number: row.number as string,
@@ -744,10 +892,11 @@ function mapInvoice(row: Record<string, unknown>): Invoice {
     customerEmail: (row.customerEmail as string) || "",
     customerPhone: (row.customerPhone as string) || null,
     organisation: (row.organisation as string) || null,
-    sku: row.sku as Invoice["sku"],
-    label: (row.label as string) || "",
-    qty: Number(row.qty || 1),
-    unitAmountPaise: Number(row.unitAmountPaise || 0),
+    customerGstin: (row.customerGstin as string) || null,
+    supplyState: (row.supplyState as string) || null,
+    lines,
+    discountPaise: Number(row.discountPaise || 0),
+    promoCode: (row.promoCode as string) || null,
     gstRate: Number(row.gstRate || 18),
     subtotalPaise: Number(row.subtotalPaise || 0),
     gstPaise: Number(row.gstPaise || 0),

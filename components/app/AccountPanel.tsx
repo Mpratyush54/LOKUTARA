@@ -1,9 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import type { AppAccount } from "./AppShell";
 import { jsonFetch, useAppAccount, useSetAppAccount } from "./AppShell";
-import { CheckoutButton } from "./CheckoutButton";
 import { showAppToast } from "./AppToast";
 import { GENDER_OPTIONS } from "@/lib/access/profile";
 
@@ -206,7 +206,7 @@ export function AccountPanel() {
         <div className="profile-card-head">
           <h2>Access</h2>
           {account.access.status !== "paid" ? (
-            <CheckoutButton sku="app_access">Upgrade now</CheckoutButton>
+            <Link className="btn btn-primary" href="/app/billing/checkout?sku=app_access">Upgrade now</Link>
           ) : null}
         </div>
         <dl className="account-dl">

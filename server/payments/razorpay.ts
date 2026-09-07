@@ -80,20 +80,35 @@ export function createRazorpayClient(opts: {
   };
 }
 
-export function invoiceIdFromWebhook(payload: unknown): { invoiceId: string | null; paymentLinkId: string | null; paymentId: string | null } {
+export function invoiceIdFromWebhook(payload: unknown): {
+  invoiceId: string | null;
+  paymentLinkId: string | null;
+  paymentId: string | null;
+  amountPaise: number | null;
+  currency: string | null;
+} {
   const root = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const inner = root.payload && typeof root.payload === "object" ? (root.payload as Record<string, unknown>) : {};
   const link = entityOf(inner.payment_link);
   const payment = entityOf(inner.payment);
-  const notes = link.notes && typeof link.notes === "object" ? (link.notes as Record<string, unknown>) : {};
+  const linkNotes = link.notes && typeof link.notes === "object" ? (link.notes as Record<string, unknown>) : {};
+  const paymentNotes = payment.notes && typeof payment.notes === "object" ? (payment.notes as Record<string, unknown>) : {};
+  const notes = { ...paymentNotes, ...linkNotes };
   const invoiceId =
     (typeof notes.invoiceId === "string" && notes.invoiceId) ||
     (typeof notes.invoice_id === "string" && notes.invoice_id) ||
     null;
+  const rawAmount = payment.amount ?? link.amount;
+  const amountPaise = typeof rawAmount === "number" && Number.isFinite(rawAmount) ? rawAmount : null;
+  const rawCurrency = payment.currency ?? link.currency;
+  const currency = typeof rawCurrency === "string" ? rawCurrency.toUpperCase() : null;
+
   return {
     invoiceId,
     paymentLinkId: typeof link.id === "string" ? link.id : null,
     paymentId: typeof payment.id === "string" ? payment.id : null,
+    amountPaise,
+    currency,
   };
 }
 

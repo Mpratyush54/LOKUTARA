@@ -13,7 +13,7 @@ describe("LandingExperience", () => {
     expect(screen.getByRole("heading", { name: /select your company size/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 2, name: /select your company size/i })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /i’m an hr \/ people leader/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /50–500 people/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/company size in employees/i)).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /discovery/i }).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: /psychology-led/i })).toBeInTheDocument();
     expect(screen.getByText(/copy coming next/i)).toBeInTheDocument();

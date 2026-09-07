@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { SiteProviders } from "@/components/tracking/SiteProviders";
 
@@ -6,6 +6,12 @@ export const metadata: Metadata = {
   title: "Lokutara · Capacity building for Bengaluru teams",
   description:
     "Psychology-led workshops, manager effectiveness, and counselling for Bengaluru startups and SMEs. Book a complimentary discovery call.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

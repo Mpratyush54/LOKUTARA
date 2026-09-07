@@ -22,6 +22,7 @@ export type LandingQuery = {
   success: GuideLetter | null;
   buy: string | null;
   paid: boolean;
+  lead: string | null;
 };
 
 export const EMPTY_LANDING_QUERY: LandingQuery = {
@@ -38,6 +39,7 @@ export const EMPTY_LANDING_QUERY: LandingQuery = {
   success: null,
   buy: null,
   paid: false,
+  lead: null,
 };
 
 function first(value: string | string[] | undefined): string | null {
@@ -74,6 +76,7 @@ export function parseLandingQuery(
     success: asLetter(get("success")),
     buy: get("buy"),
     paid: get("paid") === "1",
+    lead: get("lead"),
   };
 }
 
@@ -97,6 +100,7 @@ export function landingHref(patch: Partial<LandingQuery>, base?: LandingQuery): 
   set("success", merged.success);
   set("buy", merged.buy);
   set("paid", merged.paid);
+  set("lead", merged.lead);
   const qs = params.toString();
   return qs ? `/?${qs}` : "/";
 }

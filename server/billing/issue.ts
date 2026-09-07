@@ -1,4 +1,4 @@
-import { isComplimentaryInvoice, type Invoice } from "../../lib/billing/invoices";
+import { invoiceSummaryLabel, isComplimentaryInvoice, type Invoice } from "../../lib/billing/invoices";
 import { HttpError } from "../middleware/errors";
 import type { RazorpayClient } from "../payments/razorpay";
 import type { InvoiceStore } from "../stores/memory";
@@ -18,7 +18,7 @@ export async function issueInvoice(
       amountPaise: invoice.totalPaise,
       invoiceId: invoice.id,
       invoiceNumber: invoice.number,
-      description: `${invoice.number} · ${invoice.label}`,
+      description: `${invoice.number} · ${invoiceSummaryLabel(invoice.lines)}`,
       customer: {
         name: invoice.customerName,
         email: invoice.customerEmail,

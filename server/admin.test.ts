@@ -305,6 +305,118 @@ describe("admin product snapshot", () => {
   });
 });
 
+describe("admin promos and invoice PDFs", () => {
+  it("creates a promo, applies it at checkout, and exports invoice PDFs", async () => {
+    const stores = createMemoryStores();
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      promos: stores.promoStore,
+      adminSecret: ADMIN_SECRET,
+      razorpay: {
+        configured: true,
+        createPaymentLink: async () => ({ id: "plink_promo", shortUrl: "https://rzp.io/i/promo" }),
+      },
+      health: {
+        storeBackend: "memory",
+        mongoConfigured: false,
+        mongoOk: () => false,
+        redisConfigured: false,
+        redisStatus: () => "disabled",
+        redisOk: () => true,
+      },
+    });
+    const created = await request(server)
+      .post("/api/admin/promos")
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ code: "welcome10", kind: "percent", value: 10, firstTimeOnly: true });
+    expect(created.status).toBe(201);
+    expect(created.body.promo.code).toBe("WELCOME10");
+
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload({ email: "promo@lokutara.test" }));
+    const rawCookie = signup.headers["set-cookie"];
+    const cookie = Array.isArray(rawCookie) ? rawCookie.join("; ") : rawCookie;
+    const checkout = await request(server)
+      .post("/api/billing/checkout")
+      .set("Cookie", cookie)
+      .send({ sku: "workshop", promoCode: "welcome10" });
+    expect(checkout.status).toBe(201);
+    // 10% off 25,000 = 2,500 off; GST on 22,500 = 4,050; total 26,550.
+    expect(checkout.body.invoice.discountPaise).toBe(250_000);
+    expect(checkout.body.invoice.promoCode).toBe("WELCOME10");
+    expect(checkout.body.invoice.totalPaise).toBe(2_655_000);
+
+    const listed = await request(server).get("/api/admin/promos").set("x-admin-secret", ADMIN_SECRET);
+    expect(listed.body.promos[0].usedCount).toBe(1);
+
+    const userPdf = await request(server)
+      .get(`/api/billing/invoices/${checkout.body.invoice.id}/pdf`)
+      .set("Cookie", cookie);
+    expect(userPdf.status).toBe(200);
+    expect(userPdf.headers["content-type"]).toMatch(/application\/pdf/);
+
+    const adminPdf = await request(server)
+      .get(`/api/admin/invoices/${checkout.body.invoice.id}/pdf`)
+      .set("x-admin-secret", ADMIN_SECRET);
+    expect(adminPdf.status).toBe(200);
+
+    const toggled = await request(server)
+      .post("/api/admin/promos/WELCOME10/toggle")
+      .set("x-admin-secret", ADMIN_SECRET);
+    expect(toggled.body.promo.active).toBe(false);
+  });
+
+  it("rejects unknown and paused codes at checkout", async () => {
+    const stores = createMemoryStores();
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      promos: stores.promoStore,
+      adminSecret: ADMIN_SECRET,
+      razorpay: {
+        configured: true,
+        createPaymentLink: async () => ({ id: "plink_x", shortUrl: "https://rzp.io/i/x" }),
+      },
+      health: {
+        storeBackend: "memory",
+        mongoConfigured: false,
+        mongoOk: () => false,
+        redisConfigured: false,
+        redisStatus: () => "disabled",
+        redisOk: () => true,
+      },
+    });
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload({ email: "nopromo@lokutara.test" }));
+    const rawCookie = signup.headers["set-cookie"];
+    const cookie = Array.isArray(rawCookie) ? rawCookie.join("; ") : rawCookie;
+    const denied = await request(server)
+      .post("/api/billing/checkout")
+      .set("Cookie", cookie)
+      .send({ sku: "workshop", promoCode: "NOPE" });
+    expect(denied.status).toBe(400);
+  });
+});
+
 describe("admin invoices", () => {
   it("creates, issues via Razorpay, and marks paid from a signed webhook", async () => {
     const stores = createMemoryStores();
@@ -454,5 +566,163 @@ describe("admin invoices", () => {
     expect(account?.plan).toBe("paid");
     const overview = await request(server).get("/api/admin/overview").set("x-admin-secret", ADMIN_SECRET);
     expect(overview.body.commerce.revenueThisMonth).toBe(0);
+  });
+});
+
+describe("admin moderation, leads paging, quote, and csv", () => {
+  function authedApp() {
+    const stores = createMemoryStores();
+    const server = createApiApp({
+      events: stores.eventStore,
+      leads: stores.leadStore,
+      visitors: stores.visitorStore,
+      sessions: stores.sessionStore,
+      experiments: stores.experimentConfigStore,
+      rateLimiter: stores.rateLimiter,
+      accounts: stores.accountStore,
+      appSessions: stores.appSessionStore,
+      billing: stores.billingSettingsStore,
+      threads: stores.threadStore,
+      assessmentRuns: stores.assessmentRunStore,
+      invoices: stores.invoiceStore,
+      promos: stores.promoStore,
+      adminSecret: ADMIN_SECRET,
+      razorpay: {
+        configured: true,
+        createPaymentLink: async () => ({ id: "plink_q", shortUrl: "https://rzp.io/i/q" }),
+      },
+      health: {
+        storeBackend: "memory",
+        mongoConfigured: false,
+        mongoOk: () => false,
+        redisConfigured: false,
+        redisStatus: () => "disabled",
+        redisOk: () => true,
+      },
+    });
+    return { server, stores };
+  }
+
+  async function signupCookie(server: ReturnType<typeof createApiApp>, email: string) {
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload({ email }));
+    const raw = signup.headers["set-cookie"];
+    return Array.isArray(raw) ? raw.join("; ") : raw;
+  }
+
+  it("bans an account out of login and sessions, then unbans", async () => {
+    const { server, stores } = authedApp();
+    const signup = await request(server).post("/api/auth/signup").send(signupPayload({ email: "ban@lokutara.test" }));
+    const id = signup.body.account.id as string;
+    const raw = signup.headers["set-cookie"];
+    const cookie = Array.isArray(raw) ? raw.join("; ") : raw;
+
+    const banned = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "ban", reason: "spam" });
+    expect(banned.status).toBe(200);
+    expect(banned.body.account.banned).toBe(true);
+
+    const relogin = await request(server).post("/api/auth/login").send({ email: "ban@lokutara.test", password: "pass-word" });
+    expect(relogin.status).toBe(403);
+
+    const stale = await request(server).get("/api/workspace/home").set("Cookie", cookie);
+    expect([401, 403]).toContain(stale.status);
+
+    const unbanned = await request(server)
+      .post(`/api/admin/accounts/${id}/access`)
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ action: "unban" });
+    expect(unbanned.body.account.banned).toBe(false);
+    const login = await request(server).post("/api/auth/login").send({ email: "ban@lokutara.test", password: "pass-word" });
+    expect(login.status).toBe(200);
+  });
+
+  it("rejects community posts containing blocked words", async () => {
+    const { server } = authedApp();
+    const saved = await request(server)
+      .put("/api/admin/billing")
+      .set("x-admin-secret", ADMIN_SECRET)
+      .send({ blockedWords: ["spamword"] });
+    expect(saved.body.settings.blockedWords).toContain("spamword");
+
+    const cookie = await signupCookie(server, "words@lokutara.test");
+    const bad = await request(server)
+      .post("/api/workspace/community")
+      .set("Cookie", cookie)
+      .send({
+        title: "A clear question about spamword here",
+        body: "This body is long enough to pass validation rules easily.",
+        tags: ["interview"],
+        communityNoticeAccepted: true,
+      });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBe("blocked_word");
+
+    const good = await request(server)
+      .post("/api/workspace/community")
+      .set("Cookie", cookie)
+      .send({
+        title: "A clear question about interviews here",
+        body: "This body is long enough to pass validation rules easily.",
+        tags: ["interview"],
+        communityNoticeAccepted: true,
+      });
+    expect(good.status).toBe(201);
+  });
+
+  it("paginates and filters leads server-side", async () => {
+    const { server, stores } = authedApp();
+    for (const [name, type, email] of [["Asha", "counselling", "a@t.test"], ["Ravi", "discovery", "r@t.test"], ["Asha Rao", "discovery", "ar@t.test"]] as const) {
+      await stores.leadStore.insert({
+        id: `lead_${email}`,
+        type,
+        name,
+        email,
+        phone: "9999999999",
+        role: null,
+        organisation: null,
+        sizeBand: null,
+        preferredTime: null,
+        visitorId: null,
+        consentedAt: new Date(),
+        adultConfirmedAt: new Date(),
+        privacyNoticeVersion: "v1",
+        createdAt: new Date(),
+      });
+    }
+    const page1 = await request(server).get("/api/admin/leads?limit=2&page=1").set("x-admin-secret", ADMIN_SECRET);
+    expect(page1.body.total).toBe(3);
+    expect(page1.body.pages).toBe(2);
+    expect(page1.body.leads).toHaveLength(2);
+    const page2 = await request(server).get("/api/admin/leads?limit=2&page=2").set("x-admin-secret", ADMIN_SECRET);
+    expect(page2.body.leads).toHaveLength(1);
+    const filtered = await request(server).get("/api/admin/leads?q=asha&type=discovery").set("x-admin-secret", ADMIN_SECRET);
+    expect(filtered.body.total).toBe(1);
+    expect(filtered.body.leads[0].email).toBe("ar@t.test");
+  });
+
+  it("quotes a checkout with and without a promo", async () => {
+    const { server } = authedApp();
+    await request(server).post("/api/admin/promos").set("x-admin-secret", ADMIN_SECRET).send({ code: "Q10", kind: "percent", value: 10 });
+    const cookie = await signupCookie(server, "quote@lokutara.test");
+    const plain = await request(server).post("/api/billing/quote").set("Cookie", cookie).send({ sku: "workshop" });
+    expect(plain.status).toBe(200);
+    expect(plain.body.totalPaise).toBe(2_950_000);
+    expect(plain.body.discountPaise).toBe(0);
+    const promo = await request(server).post("/api/billing/quote").set("Cookie", cookie).send({ sku: "workshop", promoCode: "q10" });
+    expect(promo.body.discountPaise).toBe(250_000);
+    expect(promo.body.totalPaise).toBe(2_655_000);
+    expect(promo.body.promoCode).toBe("Q10");
+    const bad = await request(server).post("/api/billing/quote").set("Cookie", cookie).send({ sku: "workshop", promoCode: "NOPE" });
+    expect(bad.status).toBe(400);
+  });
+
+  it("exports invoices as GST csv", async () => {
+    const { server } = authedApp();
+    const res = await request(server).get("/api/admin/invoices/export.csv").set("x-admin-secret", ADMIN_SECRET);
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/csv/);
+    expect(res.text).toContain("CGST");
   });
 });

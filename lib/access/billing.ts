@@ -18,6 +18,7 @@ export type BillingSettings = {
   gstin: string;
   address: string;
   gstRate: number;
+  blockedWords: string[];
 };
 
 export type AccountRecord = {
@@ -38,6 +39,8 @@ export type AccountRecord = {
   gender?: GenderIdentity | null;
   termsAcceptedAt?: Date | null;
   privacyNoticeVersion?: string | null;
+  bannedAt?: Date | null;
+  banReason?: string | null;
 };
 
 export type AccessStatus = "none" | "trial" | "paid" | "expired";
@@ -59,7 +62,28 @@ export const DEFAULT_BILLING_SETTINGS: BillingSettings = {
   gstin: "",
   address: "",
   gstRate: 18,
+  blockedWords: [],
 };
+
+export function isBanned(account: Pick<AccountRecord, "bannedAt"> | null | undefined): boolean {
+  return Boolean(account?.bannedAt);
+}
+
+export function normalizeBlockedWord(raw: unknown): string {
+  return typeof raw === "string" ? raw.trim().toLowerCase().slice(0, 40) : "";
+}
+
+export function findBlockedWord(text: string, words: string[]): string | null {
+  const lower = text.toLowerCase();
+  for (const word of words) {
+    const w = word.trim().toLowerCase();
+    if (!w) continue;
+    // Match whole words to avoid blocking substrings like "class" in "classic".
+    const hit = lower.split(/[^a-z0-9]+/).includes(w);
+    if (hit) return w;
+  }
+  return null;
+}
 
 export const ALL_MODULES_OFF: ModuleFlags = { assessments: false, community: false };
 export const ALL_MODULES_ON: ModuleFlags = { assessments: true, community: true };
@@ -142,6 +166,8 @@ export function presentAccount(account: AccountRecord, now = new Date()) {
     privacyNoticeVersion: account.privacyNoticeVersion ?? null,
     access,
     communityRole,
+    banned: isBanned(account),
+    banReason: account.banReason ?? null,
     phone: identity.phone,
     gender: identity.gender,
     age: identity.age,

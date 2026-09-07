@@ -3,12 +3,12 @@
 import { useState } from "react";
 import { showAppToast } from "./AppToast";
 
-async function checkout(sku: string) {
+async function checkout(sku: string, promoCode?: string) {
   const res = await fetch("/api/billing/checkout", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sku }),
+    body: JSON.stringify({ sku, promoCode: promoCode || undefined }),
   });
   const body = await res.json().catch(() => ({}));
   return { res, body };
@@ -18,16 +18,18 @@ export function CheckoutButton({
   sku = "app_access",
   children,
   className = "btn btn-primary",
+  promoCode,
 }: {
   sku?: string;
   children: React.ReactNode;
   className?: string;
+  promoCode?: string;
 }) {
   const [busy, setBusy] = useState(false);
 
   async function pay() {
     setBusy(true);
-    const { res, body } = await checkout(sku);
+    const { res, body } = await checkout(sku, promoCode);
     setBusy(false);
     if (!res.ok) {
       showAppToast(typeof body.message === "string" ? body.message : "Could not start payment. Try again in a moment.");

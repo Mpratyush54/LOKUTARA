@@ -1,8 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { CheckoutButton } from "./CheckoutButton";
 import { jsonFetch, useAppAccount, useSetAppAccount } from "./AppShell";
 import { showAppToast } from "./AppToast";
 
@@ -38,6 +38,29 @@ export function BillingPanel() {
   const [razorpayConfigured, setRazorpayConfigured] = useState(true);
   const [ready, setReady] = useState(false);
   const [confirming, setConfirming] = useState(returning);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  async function downloadInvoice(invoice: InvoiceRow) {
+    setDownloading(invoice.id);
+    try {
+      const res = await fetch(`/api/billing/invoices/${invoice.id}/pdf`, { credentials: "include" });
+      if (!res.ok) {
+        showAppToast("Could not download this invoice. Try again in a moment.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `lokutara-${invoice.number}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(null);
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -54,12 +77,6 @@ export function BillingPanel() {
       setReady(true);
     })();
   }, [setAccount]);
-
-  useEffect(() => {
-    if (ready && !razorpayConfigured) {
-      showAppToast("Online payment is not open yet. Try again later, or get in touch if you need this now.");
-    }
-  }, [ready, razorpayConfigured]);
 
   useEffect(() => {
     if (!returning) return;
@@ -126,14 +143,22 @@ export function BillingPanel() {
               <div className="billing-card-cta">
                 {paid && item.sku === "app_access" ? (
                   <p className="meta">Already included on this account.</p>
+                ) : !razorpayConfigured ? (
+                  <p className="meta">Online payment opens soon — <a href="/#contact">get in touch</a> to buy this now.</p>
                 ) : (
-                  <CheckoutButton sku={item.sku}>Pay {item.totalLabel}</CheckoutButton>
+                  <Link className="btn btn-primary" href={`/app/billing/checkout?sku=${item.sku}`}>
+                    Review &amp; pay · {item.totalLabel}
+                  </Link>
                 )}
               </div>
             </article>
           );
         })}
       </div>
+
+      {!paid && razorpayConfigured ? (
+        <p className="meta">Promo codes can be applied on the checkout page before you pay.</p>
+      ) : null}
 
       {invoices.length ? (
         <section>
@@ -153,6 +178,15 @@ export function BillingPanel() {
                 <span>
                   <span className="app-plan-pill">{invoice.status}</span>{" "}
                   <span className="num">{invoice.totalLabel}</span>
+                  <br />
+                  <button
+                    type="button"
+                    className="admin-text-btn"
+                    disabled={downloading === invoice.id}
+                    onClick={() => void downloadInvoice(invoice)}
+                  >
+                    {downloading === invoice.id ? "Preparing…" : "Download PDF"}
+                  </button>
                 </span>
               </li>
             ))}

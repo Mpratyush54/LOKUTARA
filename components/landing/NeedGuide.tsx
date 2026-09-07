@@ -4,7 +4,6 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   GUIDE_QUESTIONS,
   GUIDE_SERVICES,
-  GUIDE_SIZE_OPTIONS,
   encodeGuideLead,
   recommendGuide,
   recommendHeadline,
@@ -14,7 +13,6 @@ import {
 import { PEOPLE_FIGURE_MAX, peopleCountForHeadcount, tierForHeadcount } from "@/lib/landing/content";
 import {
   EMPTY_LANDING_QUERY,
-  landingUrlLabel,
   parseLandingQuery,
   writeLandingUrl,
   type GuideStep,
@@ -68,6 +66,7 @@ export function NeedGuide({
   const [answers, setAnswers] = useState<GuideAnswers>(answersFromQuery(seed));
   const [headcount, setHeadcount] = useState(() => headcountFromQuery(seed));
   const [sending, setSending] = useState(false);
+  const [leadId, setLeadId] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const individual = answers.who === "e";
   const services = recommendGuide(answers);
@@ -131,8 +130,8 @@ export function NeedGuide({
     track("slider_change", { headcount: value, tier: tierForHeadcount(value).tier });
   }
 
-  function chooseSize(band: (typeof GUIDE_SIZE_OPTIONS)[number]["id"]) {
-    setHeadcount(headcountForSizeBand(band));
+  function commitSlider() {
+    const band = sizeBandForHeadcount(headcount);
     publish("who", { sizeBand: band });
   }
 
@@ -154,7 +153,7 @@ export function NeedGuide({
     try {
       const leadType = individual ? "counselling" : "discovery";
       await track("form_start", { type: leadType });
-      await submitLead({
+      const result = await submitLead({
         type: leadType,
         name: data.get("name"),
         email: data.get("email"),
@@ -167,6 +166,8 @@ export function NeedGuide({
         adultConfirmed: data.get("privacyAccepted") === "on",
       });
       await track("lead_submitted", { type: leadType, rec: encoded.preferredTime });
+      const id = typeof (result as { id?: unknown })?.id === "string" ? (result as { id: string }).id : null;
+      setLeadId(id);
       publish("result", {}, "push");
     } catch (err) {
       showAppToast(err instanceof Error ? err.message : "Could not send. Try again in a moment.");
@@ -179,25 +180,14 @@ export function NeedGuide({
     step === "who" || step === "noticing" || step === "affected" || step === "success"
       ? GUIDE_QUESTIONS[step]
       : null;
-  const urlPreview = landingUrlLabel({
-    ...EMPTY_LANDING_QUERY,
-    gstep: step,
-    size: answers.sizeBand ?? sizeBand,
-    who: answers.who,
-    noticing: answers.noticing,
-    affected: answers.affected,
-    success: answers.success,
-    headcount,
-  });
-
   return (
     <div className="guide-browser">
       <div className="guide-browser-bar">
         <button type="button" className="btn btn-ghost" onClick={back} disabled={step === "size"} aria-label="Back">
           ←
         </button>
-        <p className="guide-url" title={urlPreview}>
-          {urlPreview}
+        <p className="guide-step-label" aria-live="polite">
+          Step {stepIndex(step)} of {individual ? 4 : 7}
         </p>
       </div>
       <div className="guide-panel">
@@ -216,18 +206,18 @@ export function NeedGuide({
         </div>
 
         {step === "size" ? (
-          <>
+          <div className="guide-step-enter" key="size">
             <p className="eyebrow">Question 1</p>
             <h3 ref={headingRef} tabIndex={-1}>
               Select your company size
             </h3>
             <p className="lead" style={{ marginTop: 10 }}>
-              Drag the count, or tap a band. The people fill in as you go — this is the size we use for everything that follows.
+              Drag the slider — release to move to the next step.
             </p>
-            <div className="guide-size">
+            <div className="guide-size guide-size-slider-only">
               <div className="guide-size-tool">
                 <div className="size-display num">{headcount.toLocaleString("en-IN")}</div>
-                <span className="meta">employees</span>
+                <span className="meta">employees · {tier.tier}</span>
                 <input
                   className="size-slider"
                   type="range"
@@ -237,23 +227,12 @@ export function NeedGuide({
                   value={headcount}
                   aria-label="Company size in employees"
                   onChange={(e) => onSlider(Number(e.target.value))}
+                  onPointerUp={commitSlider}
+                  onTouchEnd={commitSlider}
+                  onKeyUp={(e) => {
+                    if (e.key === "Enter") commitSlider();
+                  }}
                 />
-                <div className="guide-choices">
-                  {GUIDE_SIZE_OPTIONS.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className={`guide-choice${sizeBand === option.id ? " is-on" : ""}`}
-                      onClick={() => chooseSize(option.id)}
-                    >
-                      <span className="guide-letter">·</span>
-                      <span>{option.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="size-copy" key={tier.tier}>
-                  {tier.msg}
-                </div>
               </div>
               <div className="size-illus">
                 <div className="size-people">
@@ -275,11 +254,11 @@ export function NeedGuide({
                 </span>
               </div>
             </div>
-          </>
+          </div>
         ) : null}
 
         {question ? (
-          <>
+          <div className="guide-step-enter" key={step}>
             <p className="eyebrow">{question.kicker}</p>
             <h3 ref={headingRef} tabIndex={-1}>
               {question.prompt}
@@ -309,51 +288,55 @@ export function NeedGuide({
                 </button>
               ))}
             </div>
-          </>
+          </div>
         ) : null}
 
         {step === "contact" ? (
-          <form className="guide-form" onSubmit={onSubmit}>
-            <p className="eyebrow">Your details</p>
-            <h3 ref={headingRef} tabIndex={-1}>
-              Where should we send the recommendation?
-            </h3>
-            <p className="lead" style={{ marginTop: 10 }}>
-              Name, email, and phone. The recommendation stays on this page, and in the URL, so a reload does not lose it.
-            </p>
-            <div className="field">
-              <label htmlFor="guide-name">Name</label>
-              <input className="input" id="guide-name" name="name" required autoComplete="name" />
+          <form className="guide-form guide-step-enter" key="contact" onSubmit={onSubmit}>
+            <div className="guide-form-head">
+              <p className="eyebrow">Your details</p>
+              <h3 ref={headingRef} tabIndex={-1}>
+                Where should we send the recommendation?
+              </h3>
+              <p className="lead" style={{ marginTop: 10 }}>
+                Name, email, and phone. The recommendation stays on this page, and in the URL, so a reload does not lose it.
+              </p>
             </div>
-            <div className="field">
-              <label htmlFor="guide-email">{individual ? "Email" : "Work email"}</label>
-              <input
-                className="input"
-                id="guide-email"
-                name="email"
-                type="email"
-                required
-                autoComplete="email"
-                placeholder="name@company.com"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="guide-phone">Phone</label>
-              <input
-                className="input"
-                id="guide-phone"
-                name="phone"
-                required
-                autoComplete="tel"
-                inputMode="tel"
-              />
-            </div>
-            {!individual ? (
+            <div className="guide-form-grid">
               <div className="field">
-                <label htmlFor="guide-org">Organisation</label>
-                <input className="input" id="guide-org" name="organisation" required autoComplete="organization" />
+                <label htmlFor="guide-name">Name</label>
+                <input className="input" id="guide-name" name="name" required autoComplete="name" />
               </div>
-            ) : null}
+              <div className="field">
+                <label htmlFor="guide-email">{individual ? "Email" : "Work email"}</label>
+                <input
+                  className="input"
+                  id="guide-email"
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  placeholder="name@company.com"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="guide-phone">Phone</label>
+                <input
+                  className="input"
+                  id="guide-phone"
+                  name="phone"
+                  required
+                  autoComplete="tel"
+                  inputMode="tel"
+                />
+              </div>
+              {!individual ? (
+                <div className="field">
+                  <label htmlFor="guide-org">Organisation</label>
+                  <input className="input" id="guide-org" name="organisation" required autoComplete="organization" />
+                </div>
+              ) : null}
+            </div>
             <label className="legal-check">
               <input type="checkbox" name="privacyAccepted" required />
               <span>
@@ -369,11 +352,16 @@ export function NeedGuide({
         ) : null}
 
         {step === "result" ? (
-          <div className="guide-result">
+          <div className="guide-result guide-step-enter">
             <p className="eyebrow">Received</p>
             <h3 ref={headingRef} tabIndex={-1}>
               {recommendHeadline(services)}
             </h3>
+            {leadId ? (
+              <p className="lead-id-line">
+                Your form has been submitted. This is your ID <code>{leadId}</code>.
+              </p>
+            ) : null}
             <p className="lead" style={{ marginTop: 10 }}>
               Same five things as the cards below. You can pay here, or open a card for the full description.
             </p>
@@ -442,4 +430,8 @@ function mark(current: GuideStep, id: GuideStep): string {
   if (here === at) return "is-now";
   if (here > at) return "is-done";
   return "";
+}
+
+function stepIndex(step: GuideStep): number {
+  return ["size", "who", "noticing", "affected", "success", "contact", "result"].indexOf(step) + 1;
 }

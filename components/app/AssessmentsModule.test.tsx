@@ -46,7 +46,7 @@ describe("AssessmentsCatalog", () => {
     expect(screen.getAllByRole("link", { name: /start test/i })[0]).toHaveAttribute("href", "/app/assessments/ocean");
   });
 
-  it("links finished runs to their reports", async () => {
+  it("opens all reports from the results button", async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -56,8 +56,9 @@ describe("AssessmentsCatalog", () => {
       }),
     } as Response);
     render(<AssessmentsCatalog />);
-    expect(await screen.findByRole("heading", { name: "Your reports" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /trait profile \(ocean\)/i })).toHaveAttribute(
+    fireEvent.click(await screen.findByRole("button", { name: /show your results/i }));
+    expect(screen.getByRole("dialog", { name: /my results/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /view report/i })).toHaveAttribute(
       "href",
       "/app/assessments/runs/run_1",
     );

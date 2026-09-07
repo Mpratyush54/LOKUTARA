@@ -6,11 +6,13 @@ import {
   type BillingSettings,
 } from "../../lib/access/billing";
 import { isCustomerSku } from "../../lib/billing/catalog";
-import { presentCustomerCatalog, presentInvoice } from "../../lib/billing/invoices";
+import { formatInrFromPaise, lineFromSku, presentCustomerCatalog, presentInvoice, settleInvoiceLines } from "../../lib/billing/invoices";
+import { promoDiscountPaise } from "../../lib/billing/promos";
+import { buildInvoicePdf } from "../../lib/billing/invoicePdf";
 import { asyncHandler, HttpError } from "../middleware/errors";
-import { requireAppSession, type AppRequest } from "../middleware/appAuth";
-import { createCustomerPayment } from "../billing/checkout";
-import type { AccountStore, AppSessionStore, BillingSettingsStore, InvoiceStore, RateLimiter } from "../stores/memory";
+import { APP_COOKIE, optionalAppSession, readAppToken, requireAppSession, type AppRequest } from "../middleware/appAuth";
+import { createCustomerPayment, resolvePromo } from "../billing/checkout";
+import type { AccountStore, AppSessionStore, BillingSettingsStore, InvoiceStore, PromoStore, RateLimiter } from "../stores/memory";
 import type { RazorpayClient } from "../payments/razorpay";
 
 export function requestOrigin(req: Request): string {
@@ -49,6 +51,7 @@ export function createBillingRouter(deps: {
   sessions: AppSessionStore;
   billing: BillingSettingsStore;
   invoices: InvoiceStore;
+  promos?: PromoStore;
   razorpay?: RazorpayClient;
   rateLimiter?: RateLimiter;
 }): Router {
@@ -83,6 +86,66 @@ export function createBillingRouter(deps: {
     }),
   );
 
+  router.get(
+    "/invoices/:id/pdf",
+    gate,
+    asyncHandler(async (req: AppRequest, res) => {
+      const invoice = await deps.invoices.get(req.params.id);
+      if (!invoice || invoice.accountId !== req.accountId) {
+        throw new HttpError(404, "not_found", "Invoice not found");
+      }
+      const settings = await deps.billing.get();
+      const pdf = buildInvoicePdf({
+        invoice,
+        seller: { legalName: settings.legalName, gstin: settings.gstin, address: settings.address },
+      });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="lokutara-${invoice.number}.pdf"`);
+      res.send(Buffer.from(pdf));
+    }),
+  );
+
+  const optionalGate = optionalAppSession(deps);
+
+  router.post(
+    "/quote",
+    optionalGate,
+    asyncHandler(async (req: AppRequest, res) => {
+      const account = req.account;
+      const skuRaw = typeof req.body?.sku === "string" ? req.body.sku : "app_access";
+      if (!isCustomerSku(skuRaw)) {
+        throw new HttpError(400, "invalid", "Choose a plan you can buy here");
+      }
+      const settings = await deps.billing.get();
+      const gstRate = settings.gstRate ?? DEFAULT_BILLING_SETTINGS.gstRate;
+      const line = lineFromSku(skuRaw, 1, undefined, gstRate);
+      const email = account?.email || (typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : undefined);
+      const { promo, code: promoCode } = await resolvePromo({
+        promoCode: req.body?.promoCode,
+        email,
+        accountId: account?.id,
+        invoices: deps.invoices,
+        promos: deps.promos,
+      });
+      const discount = promo ? promoDiscountPaise(promo, line.subtotalPaise) : 0;
+      const settled = settleInvoiceLines([line], discount);
+      res.json({
+        sku: skuRaw,
+        label: line.label,
+        unitAmountPaise: line.unitAmountPaise,
+        subtotalPaise: settled.subtotalPaise + settled.discountPaise,
+        discountPaise: settled.discountPaise,
+        promoCode,
+        promoLabel: promo ? (promo.kind === "percent" ? `${promo.value}% off` : `${formatInrFromPaise(promo.value * 100)} off`) : null,
+        gstRate: settled.gstRate,
+        gstPaise: settled.gstPaise,
+        totalPaise: settled.totalPaise,
+        totalLabel: formatInrFromPaise(settled.totalPaise),
+        razorpayConfigured: Boolean(deps.razorpay?.configured),
+      });
+    }),
+  );
+
   router.post(
     "/checkout",
     gate,
@@ -111,6 +174,8 @@ export function createBillingRouter(deps: {
           organisation: account.organisation ?? null,
         },
         invoices: deps.invoices,
+        promos: deps.promos,
+        promoCode: req.body?.promoCode,
         razorpay: deps.razorpay,
         callbackUrl: origin ? `${origin}/app/billing?paid=1` : null,
         notes: "Self-serve checkout",
@@ -180,6 +245,8 @@ export function createBillingRouter(deps: {
           organisation: organisation || existingAccount?.organisation || null,
         },
         invoices: deps.invoices,
+        promos: deps.promos,
+        promoCode: req.body?.promoCode,
         razorpay: deps.razorpay,
         callbackUrl: origin ? `${origin}/?offer=${skuRaw === "app_access" ? "workspace" : skuRaw}&paid=1` : null,
         notes: "Landing checkout",

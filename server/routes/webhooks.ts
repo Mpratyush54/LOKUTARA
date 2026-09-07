@@ -2,11 +2,12 @@ import { Router } from "express";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { invoiceIdFromWebhook, verifyRazorpaySignature } from "../payments/razorpay";
 import { markInvoicePaid } from "../billing/settle";
-import type { AccountStore, InvoiceStore } from "../stores/memory";
+import type { AccountStore, InvoiceStore, PromoStore } from "../stores/memory";
 
 export function createRazorpayWebhookRouter(deps: {
   invoices: InvoiceStore;
   accounts?: AccountStore;
+  promos?: PromoStore;
   webhookSecret: string | null;
 }): Router {
   const router = Router();
@@ -37,9 +38,20 @@ export function createRazorpayWebhookRouter(deps: {
         res.json({ ok: true, ignored: "unknown_invoice" });
         return;
       }
+      if (ids.amountPaise != null && ids.amountPaise !== invoice.totalPaise) {
+        throw new HttpError(
+          400,
+          "amount_mismatch",
+          `Payment amount ${ids.amountPaise} paise does not match invoice total ${invoice.totalPaise} paise`,
+        );
+      }
+      if (ids.currency && ids.currency !== "INR") {
+        throw new HttpError(400, "currency_mismatch", `Invalid currency: ${ids.currency}`);
+      }
       await markInvoicePaid(invoice, {
         invoices: deps.invoices,
         accounts: deps.accounts,
+        promos: deps.promos,
         paymentId: ids.paymentId,
       });
       res.json({ ok: true, invoiceId: invoice.id });

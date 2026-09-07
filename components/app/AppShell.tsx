@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { AccessSnapshot } from "@/lib/access/billing";
-import { CheckoutButton } from "./CheckoutButton";
 
 export type AppAccount = {
   id: string;
@@ -120,7 +119,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!account.access.canEnterApp && pathname !== "/app/billing") {
+  if (!account.access.canEnterApp && !pathname.startsWith("/app/billing")) {
     return (
       <div className="app-shell app-gate-wrap">
         <PaywallCard
@@ -223,7 +222,7 @@ export function PaywallCard({
       <div className="paywall-actions">
         {email ? (
           <>
-            <CheckoutButton sku="app_access">Upgrade now</CheckoutButton>
+            <Link className="btn btn-primary" href="/app/billing/checkout?sku=app_access">Upgrade now</Link>
             <Link className="btn btn-secondary" href="/app/billing">
               See plans
             </Link>
@@ -259,7 +258,7 @@ function UpgradeBanner({ daysLeft }: { daysLeft: number | null }) {
     <div className="upgrade-banner" data-testid="upgrade-banner" role="status">
       <p>{copy}</p>
       <div className="upgrade-banner-actions">
-        <CheckoutButton sku="app_access">Upgrade now</CheckoutButton>
+        <Link className="btn btn-primary" href="/app/billing/checkout?sku=app_access">Upgrade now</Link>
         <Link className="btn btn-ghost" href="/app/billing">
           See plans
         </Link>

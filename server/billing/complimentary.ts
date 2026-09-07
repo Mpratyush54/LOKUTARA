@@ -4,6 +4,7 @@ import { skuCatalog, skuGrantsAccess, type InvoiceSku } from "../../lib/billing/
 import {
   COMPLIMENTARY_NOTE,
   COMPLIMENTARY_PAYMENT_ID,
+  invoiceHasSku,
   isComplimentaryInvoice,
   nextInvoiceNumber,
   type Invoice,
@@ -27,7 +28,7 @@ export async function grantComplimentaryInvoice(input: {
   const already = existing.find(
     (invoice) =>
       invoice.accountId === input.account.id &&
-      invoice.sku === input.sku &&
+      invoiceHasSku(invoice, input.sku) &&
       isComplimentaryInvoice(invoice) &&
       invoice.status !== "cancelled",
   );
@@ -49,10 +50,22 @@ export async function grantComplimentaryInvoice(input: {
     customerEmail: input.account.email,
     customerPhone: input.account.phone ?? null,
     organisation: input.account.organisation ?? null,
-    sku: input.sku,
-    label: input.label?.trim() || `${catalog.label} · ${DEFAULT_COMPLIMENTARY_LABEL}`,
-    qty: 1,
-    unitAmountPaise: 0,
+    customerGstin: null,
+    supplyState: null,
+    lines: [
+      {
+        sku: input.sku,
+        label: input.label?.trim() || `${catalog.label} · ${DEFAULT_COMPLIMENTARY_LABEL}`,
+        qty: 1,
+        unitAmountPaise: 0,
+        gstRate: 0,
+        subtotalPaise: 0,
+        gstPaise: 0,
+        totalPaise: 0,
+      },
+    ],
+    discountPaise: 0,
+    promoCode: null,
     gstRate: 0,
     subtotalPaise: 0,
     gstPaise: 0,

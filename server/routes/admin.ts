@@ -22,12 +22,14 @@ import {
 } from "../middleware/adminAuth";
 import type {
   AccountStore,
+  AppSessionStore,
   AssessmentRunStore,
   BillingSettingsStore,
   EventStore,
   ExperimentConfigStore,
   InvoiceStore,
   LeadStore,
+  PromoStore,
   RateLimiter,
   StoredExperimentConfig,
   StoredLead,
@@ -35,24 +37,32 @@ import type {
 } from "../stores/memory";
 import { loadProductSnapshot } from "../../lib/product/snapshot";
 import { createProductUpstream, type ProductUpstream } from "../../lib/product/upstream";
-import { INVOICE_SKUS, isInvoiceSku, skuGrantsAccess } from "../../lib/billing/catalog";
+import { INVOICE_SKUS, isInvoiceSku } from "../../lib/billing/catalog";
 import { computeCommerce } from "../../lib/billing/commerce";
 import {
   DEFAULT_GST_RATE,
+  invoiceGrantsAccess,
   lineFromSku,
   nextInvoiceNumber,
+  normalizeGstin,
   presentInvoice,
   rupeesToPaise,
+  settleInvoiceLines,
   type Invoice,
+  type InvoiceLine,
 } from "../../lib/billing/invoices";
 import { grantComplimentaryInvoice, requireAccountForComplimentary } from "../billing/complimentary";
 import { issueInvoice } from "../billing/issue";
 import { markInvoicePaid } from "../billing/settle";
+import { buildInvoicePdf } from "../../lib/billing/invoicePdf";
+import { invoicesToGstCsv } from "../../lib/billing/gstCsv";
+import { normalizePromoCode, presentPromo, type Promo } from "../../lib/billing/promos";
 import type { RazorpayClient } from "../payments/razorpay";
 import {
   ALL_MODULES_OFF,
   DEFAULT_BILLING_SETTINGS,
   addDays,
+  normalizeBlockedWord,
   presentAccount,
   resolveAccess,
   type BillingSettings,
@@ -135,10 +145,12 @@ export function createAdminRouter(deps: {
   adminEmail?: string | null;
   product?: ProductUpstream;
   accounts?: AccountStore;
+  sessions?: AppSessionStore;
   billing?: BillingSettingsStore;
   threads?: ThreadStore;
   assessmentRuns?: AssessmentRunStore;
   invoices?: InvoiceStore;
+  promos?: PromoStore;
   razorpay?: RazorpayClient;
   rateLimiter: RateLimiter;
 }): Router {
@@ -228,11 +240,19 @@ export function createAdminRouter(deps: {
     "/leads",
     gate,
     asyncHandler(async (req, res) => {
-      const limit = Number(req.query.limit || 50);
-      const leads = await deps.leads.list(Number.isFinite(limit) ? limit : 50);
+      const limitRaw = Number(req.query.limit || 25);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 100)) : 25;
+      const pageRaw = Number(req.query.page || 1);
+      const page = Number.isFinite(pageRaw) ? Math.max(1, Math.floor(pageRaw)) : 1;
+      const q = typeof req.query.q === "string" ? req.query.q : "";
+      const type = typeof req.query.type === "string" ? req.query.type : "";
+      const { rows, total } = await deps.leads.query({ q, type, limit, offset: (page - 1) * limit });
       res.json({
-        leads: leads.map(presentLeadForAdmin),
-        count: leads.length,
+        leads: rows.map(presentLeadForAdmin),
+        count: rows.length,
+        total,
+        page,
+        pages: Math.max(1, Math.ceil(total / limit)),
       });
     }),
   );
@@ -414,13 +434,90 @@ export function createAdminRouter(deps: {
         threads: threads.slice(0, 50).map((thread) => ({
           id: thread.id,
           title: thread.title,
+          body: thread.body,
           authorName: thread.authorName,
+          authorId: thread.authorId,
           tags: thread.tags,
           views: thread.views,
           answerCount: thread.answers.length,
           createdAt: thread.createdAt.toISOString(),
         })),
       });
+    }),
+  );
+
+  function presentThreadForAdmin(thread: {
+    id: string;
+    title: string;
+    body: string;
+    authorId: string;
+    authorName: string;
+    tags: string[];
+    views: number;
+    createdAt: Date;
+    answers: Array<{
+      id: string;
+      authorId: string;
+      authorName: string;
+      body: string;
+      createdAt: Date;
+      upvotes: number;
+    }>;
+  }) {
+    return {
+      id: thread.id,
+      title: thread.title,
+      body: thread.body,
+      authorId: thread.authorId,
+      authorName: thread.authorName,
+      tags: thread.tags,
+      views: thread.views,
+      answerCount: thread.answers.length,
+      createdAt: thread.createdAt.toISOString(),
+      answers: thread.answers.map((answer) => ({
+        id: answer.id,
+        authorId: answer.authorId,
+        authorName: answer.authorName,
+        body: answer.body,
+        upvotes: answer.upvotes,
+        createdAt: answer.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  router.get(
+    "/threads/:id",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.threads) throw new HttpError(503, "unavailable", "Thread store is not configured");
+      const thread = await deps.threads.get(req.params.id);
+      if (!thread) throw new HttpError(404, "not_found", "Thread not found");
+      res.json({ thread: presentThreadForAdmin(thread) });
+    }),
+  );
+
+  router.delete(
+    "/threads/:id",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.threads) throw new HttpError(503, "unavailable", "Thread store is not configured");
+      const removed = await deps.threads.deleteThread(req.params.id);
+      if (!removed) throw new HttpError(404, "not_found", "Thread not found");
+      res.json({ ok: true, id: req.params.id });
+    }),
+  );
+
+  router.delete(
+    "/threads/:id/answers/:answerId",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.threads) throw new HttpError(503, "unavailable", "Thread store is not configured");
+      const thread = await deps.threads.get(req.params.id);
+      if (!thread) throw new HttpError(404, "not_found", "Thread not found");
+      const exists = thread.answers.some((answer) => answer.id === req.params.answerId);
+      if (!exists) throw new HttpError(404, "not_found", "Answer not found");
+      const updated = await deps.threads.deleteAnswer(req.params.id, req.params.answerId);
+      res.json({ ok: true, thread: updated ? presentThreadForAdmin(updated) : null });
     }),
   );
 
@@ -459,6 +556,14 @@ export function createAdminRouter(deps: {
       if (!Number.isFinite(gstRate) || gstRate < 0 || gstRate > 40) {
         throw new HttpError(400, "invalid", "GST rate must be 0–40");
       }
+      let blockedWords = existing.blockedWords ?? [];
+      if (body.blockedWords !== undefined) {
+        if (!Array.isArray(body.blockedWords)) throw new HttpError(400, "invalid", "blockedWords must be a list");
+        const cleaned = body.blockedWords
+          .map((word: unknown) => normalizeBlockedWord(word))
+          .filter((word: string) => word.length > 0);
+        blockedWords = [...new Set(cleaned)].slice(0, 200);
+      }
       const settings: BillingSettings = {
         ...existing,
         autoTrialOnSignup:
@@ -469,6 +574,7 @@ export function createAdminRouter(deps: {
         gstin: typeof body.gstin === "string" ? body.gstin.trim() : existing.gstin,
         address: typeof body.address === "string" ? body.address.trim() : existing.address,
         gstRate,
+        blockedWords,
       };
       await deps.billing.save(settings);
       res.json({ settings });
@@ -521,10 +627,22 @@ export function createAdminRouter(deps: {
         account.plan = "none";
         account.trialEndsAt = new Date();
         account.modules = { ...ALL_MODULES_OFF };
+      } else if (action === "ban") {
+        const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 200) : "";
+        account.plan = "none";
+        account.trialEndsAt = new Date();
+        account.modules = { ...ALL_MODULES_OFF };
+        account.communityRole = "student";
+        account.bannedAt = new Date();
+        account.banReason = reason || null;
+        if (deps.sessions) await deps.sessions.deleteByAccount(account.id);
+      } else if (action === "unban") {
+        account.bannedAt = null;
+        account.banReason = null;
       } else if (action === "role") {
         /* community role only */
       } else {
-        throw new HttpError(400, "invalid", "action must be trial, paid, revoke, or role");
+        throw new HttpError(400, "invalid", "action must be trial, paid, revoke, ban, unban, or role");
       }
       if (body.communityRole !== undefined) {
         const role = body.communityRole;
@@ -626,6 +744,121 @@ export function createAdminRouter(deps: {
     }),
   );
 
+  router.get(
+    "/invoices/export.csv",
+    gate,
+    asyncHandler(async (_req, res) => {
+      if (!deps.invoices) throw new HttpError(503, "unavailable", "Invoice store is not configured");
+      const rows = await deps.invoices.list();
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="lokutara-invoices.csv"`);
+      res.send(invoicesToGstCsv(rows));
+    }),
+  );
+
+  router.get(
+    "/invoices/:id/pdf",
+    gate,
+    asyncHandler(async (req, res) => {
+      const invoice = await requireInvoice(deps, req.params.id);
+      const settings = deps.billing ? await deps.billing.get() : DEFAULT_BILLING_SETTINGS;
+      const pdf = buildInvoicePdf({
+        invoice,
+        seller: { legalName: settings.legalName, gstin: settings.gstin, address: settings.address },
+      });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="lokutara-${invoice.number}.pdf"`);
+      res.send(Buffer.from(pdf));
+    }),
+  );
+
+  router.get(
+    "/promos",
+    gate,
+    asyncHandler(async (_req, res) => {
+      if (!deps.promos) throw new HttpError(503, "unavailable", "Promo store is not configured");
+      const promos = await deps.promos.list();
+      res.json({ promos: promos.map(presentPromo) });
+    }),
+  );
+
+  router.post(
+    "/promos",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.promos) throw new HttpError(503, "unavailable", "Promo store is not configured");
+      const body = req.body || {};
+      const code = normalizePromoCode(body.code);
+      if (!code || code.length < 3) throw new HttpError(400, "invalid", "Code needs at least 3 characters");
+      const kind = body.kind === "flat" ? "flat" : "percent";
+      const value = Number(body.value);
+      if (!Number.isFinite(value) || value <= 0 || (kind === "percent" && value > 100)) {
+        throw new HttpError(400, "invalid", kind === "percent" ? "Percent must be 1–100" : "Amount must be more than 0");
+      }
+      const maxDiscountRupees =
+        body.maxDiscountRupees === null || body.maxDiscountRupees === undefined || body.maxDiscountRupees === ""
+          ? null
+          : Number(body.maxDiscountRupees);
+      if (maxDiscountRupees !== null && (!Number.isFinite(maxDiscountRupees) || maxDiscountRupees <= 0)) {
+        throw new HttpError(400, "invalid", "Max discount must be more than 0");
+      }
+      const maxUses = body.maxUses === null || body.maxUses === undefined || body.maxUses === ""
+        ? null
+        : Number(body.maxUses);
+      if (maxUses !== null && (!Number.isFinite(maxUses) || maxUses < 1)) {
+        throw new HttpError(400, "invalid", "Usage limit must be 1 or more");
+      }
+      let expiresAt: Date | null = null;
+      if (typeof body.expiresAt === "string" && body.expiresAt) {
+        expiresAt = new Date(body.expiresAt);
+        if (Number.isNaN(expiresAt.getTime())) throw new HttpError(400, "invalid", "Expiry date is invalid");
+      }
+      if (await deps.promos.getByCode(code)) {
+        throw new HttpError(409, "conflict", "That code already exists");
+      }
+      const promo: Promo = {
+        id: `promo_${randomBytes(8).toString("hex")}`,
+        code,
+        kind,
+        value,
+        maxDiscountRupees,
+        maxUses,
+        usedCount: 0,
+        firstTimeOnly: Boolean(body.firstTimeOnly),
+        active: true,
+        expiresAt,
+        note: typeof body.note === "string" && body.note.trim() ? body.note.trim() : null,
+        createdAt: new Date(),
+      };
+      await deps.promos.upsert(promo);
+      res.status(201).json({ promo: presentPromo(promo) });
+    }),
+  );
+
+  router.post(
+    "/promos/:code/toggle",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.promos) throw new HttpError(503, "unavailable", "Promo store is not configured");
+      const promo = await deps.promos.getByCode(req.params.code);
+      if (!promo) throw new HttpError(404, "not_found", "Promo not found");
+      const next = { ...promo, active: !promo.active };
+      await deps.promos.upsert(next);
+      res.json({ promo: presentPromo(next) });
+    }),
+  );
+
+  router.delete(
+    "/promos/:code",
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!deps.promos) throw new HttpError(503, "unavailable", "Promo store is not configured");
+      const removed = await deps.promos.remove(req.params.code);
+      if (!removed) throw new HttpError(404, "not_found", "Promo not found");
+      res.json({ ok: true });
+    }),
+  );
+
   router.post(
     "/invoices/:id/issue",
     gate,
@@ -644,6 +877,7 @@ export function createAdminRouter(deps: {
       const paid = await markInvoicePaid(invoice, {
         invoices: deps.invoices!,
         accounts: deps.accounts,
+        promos: deps.promos,
         paymentId: typeof req.body?.paymentId === "string" ? req.body.paymentId : "offline",
       });
       res.json({ invoice: presentInvoice(paid) });
@@ -681,14 +915,53 @@ async function requireInvoice(
   return invoice;
 }
 
+function parseInvoiceLines(
+  body: Record<string, unknown>,
+  defaultGstRate: number,
+): InvoiceLine[] {
+  const rawLines = Array.isArray(body.lines) ? body.lines : null;
+  if (rawLines && rawLines.length) {
+    if (rawLines.length > 20) throw new HttpError(400, "invalid", "A bill can have at most 20 lines");
+    return rawLines.map((raw, index) => {
+      const row = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+      const skuRaw = typeof row.sku === "string" ? row.sku : "";
+      if (!isInvoiceSku(skuRaw)) {
+        throw new HttpError(400, "invalid", `Line ${index + 1}: choose a catalogue item`);
+      }
+      const qty = row.qty !== undefined ? Number(row.qty) : 1;
+      if (!Number.isFinite(qty) || qty < 1 || qty > 50) {
+        throw new HttpError(400, "invalid", `Line ${index + 1}: quantity must be 1–50`);
+      }
+      const gstRate = row.gstRate !== undefined ? Number(row.gstRate) : defaultGstRate;
+      if (!Number.isFinite(gstRate) || gstRate < 0 || gstRate > 40) {
+        throw new HttpError(400, "invalid", `Line ${index + 1}: GST must be 0–40%`);
+      }
+      const rupees = row.unitAmountRupees !== undefined ? Number(row.unitAmountRupees) : undefined;
+      const unitAmountPaise =
+        rupees !== undefined && Number.isFinite(rupees) ? rupeesToPaise(rupees) : undefined;
+      if (unitAmountPaise !== undefined && unitAmountPaise < 0) {
+        throw new HttpError(400, "invalid", `Line ${index + 1}: price cannot be negative`);
+      }
+      const label = typeof row.label === "string" ? row.label : undefined;
+      return lineFromSku(skuRaw, qty, unitAmountPaise, gstRate, label);
+    });
+  }
+
+  // Single-line payload from customer-style callers and older admin forms.
+  const skuRaw = typeof body.sku === "string" ? body.sku : "";
+  if (!isInvoiceSku(skuRaw)) throw new HttpError(400, "invalid", "Add at least one service line");
+  const qty = body.qty !== undefined ? Number(body.qty) : 1;
+  const gstRate = body.gstRate !== undefined ? Number(body.gstRate) : defaultGstRate;
+  const rupees = body.unitAmountRupees !== undefined ? Number(body.unitAmountRupees) : undefined;
+  const unitAmountPaise = rupees !== undefined && Number.isFinite(rupees) ? rupeesToPaise(rupees) : undefined;
+  const label = typeof body.label === "string" ? body.label : undefined;
+  return [lineFromSku(skuRaw, qty, unitAmountPaise, gstRate, label)];
+}
+
 async function buildInvoiceFromBody(
   body: Record<string, unknown>,
   deps: { invoices: InvoiceStore; accounts?: AccountStore; gstRate: number },
 ): Promise<Invoice> {
-  const skuRaw = typeof body.sku === "string" ? body.sku : "";
-  if (!isInvoiceSku(skuRaw)) {
-    throw new HttpError(400, "invalid", "Choose a catalogue item");
-  }
   let accountId = typeof body.accountId === "string" && body.accountId ? body.accountId : null;
   let name = typeof body.name === "string" ? body.name.trim() : "";
   let email = typeof body.email === "string" ? body.email.trim() : "";
@@ -706,19 +979,26 @@ async function buildInvoiceFromBody(
   if (!name || !email) {
     throw new HttpError(400, "invalid", "Customer name and email are required");
   }
-  const qty = body.qty !== undefined ? Number(body.qty) : 1;
-  const gstRate = body.gstRate !== undefined ? Number(body.gstRate) : deps.gstRate;
-  const rupees = body.unitAmountRupees !== undefined ? Number(body.unitAmountRupees) : undefined;
-  const unitAmountPaise = rupees !== undefined && Number.isFinite(rupees) ? rupeesToPaise(rupees) : undefined;
-  const line = lineFromSku(skuRaw, qty, unitAmountPaise, gstRate);
-  if (line.totalPaise < 100) {
+  const gstinRaw = typeof body.customerGstin === "string" ? body.customerGstin : "";
+  let customerGstin: string | null = null;
+  if (gstinRaw.trim()) {
+    customerGstin = normalizeGstin(gstinRaw);
+    if (!customerGstin) throw new HttpError(400, "invalid", "Customer GSTIN looks invalid (15 characters)");
+  }
+  const supplyState =
+    typeof body.supplyState === "string" && body.supplyState.trim() ? body.supplyState.trim().slice(0, 60) : null;
+  const pricedLines = parseInvoiceLines(body, deps.gstRate);
+  const discountRupees = body.discountRupees !== undefined ? Number(body.discountRupees) : 0;
+  if (!Number.isFinite(discountRupees) || discountRupees < 0) {
+    throw new HttpError(400, "invalid", "Discount must be 0 or more");
+  }
+  const settled = settleInvoiceLines(pricedLines, rupeesToPaise(discountRupees));
+  if (settled.totalPaise < 100) {
     throw new HttpError(400, "invalid", "Bill total must be at least ₹1");
   }
   const existing = await deps.invoices.list();
   const dueAt =
-    typeof body.dueAt === "string" && body.dueAt
-      ? new Date(body.dueAt)
-      : addDays(new Date(), 14);
+    typeof body.dueAt === "string" && body.dueAt ? new Date(body.dueAt) : addDays(new Date(), 14);
   return {
     id: `inv_${randomBytes(8).toString("hex")}`,
     number: nextInvoiceNumber(existing.map((row) => row.number)),
@@ -727,20 +1007,22 @@ async function buildInvoiceFromBody(
     customerEmail: email,
     customerPhone: phone,
     organisation,
-    sku: line.sku,
-    label: typeof body.label === "string" && body.label.trim() ? body.label.trim() : line.label,
-    qty: line.qty,
-    unitAmountPaise: line.unitAmountPaise,
-    gstRate: line.gstRate,
-    subtotalPaise: line.subtotalPaise,
-    gstPaise: line.gstPaise,
-    totalPaise: line.totalPaise,
+    customerGstin,
+    supplyState,
+    lines: settled.lines,
+    discountPaise: settled.discountPaise,
+    promoCode: null,
+    gstRate: settled.gstRate,
+    subtotalPaise: settled.subtotalPaise,
+    gstPaise: settled.gstPaise,
+    totalPaise: settled.totalPaise,
     currency: "INR",
     status: "draft",
     issuedAt: null,
     dueAt,
     paidAt: null,
-    grantAccessOnPay: body.grantAccessOnPay !== undefined ? Boolean(body.grantAccessOnPay) : skuGrantsAccess(skuRaw),
+    grantAccessOnPay:
+      body.grantAccessOnPay !== undefined ? Boolean(body.grantAccessOnPay) : invoiceGrantsAccess(settled.lines),
     kind: "sale",
     razorpayPaymentLinkId: null,
     paymentUrl: null,

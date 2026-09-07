@@ -1,13 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
-import { canPostCommunityAnswer, communityRoleOf } from "../../lib/access/billing";
+import { canPostCommunityAnswer, communityRoleOf, findBlockedWord } from "../../lib/access/billing";
 import { COMMUNITY_REPLY_RULES, LOCAL_ASSESSMENTS, interpretAssessment, presentAssessmentRun, type StoredAnswer } from "../../lib/product/workspace";
 import { reportForRun } from "../../lib/product/report";
 import { buildAssessmentReportPdf } from "../../lib/product/reportPdf";
 import { ASSESSMENT_NOTICE_VERSION } from "../../lib/legal/compliance";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { requireAppAccess, requireModule, type AppRequest } from "../middleware/appAuth";
-import type { AccountStore, AppSessionStore, AssessmentRunStore, ThreadStore } from "../stores/memory";
+import type { AccountStore, AppSessionStore, AssessmentRunStore, BillingSettingsStore, ThreadStore } from "../stores/memory";
 import type { LocalThread } from "../../lib/product/workspace";
 
 function replyPolicyFor(req: AppRequest) {
@@ -45,11 +45,18 @@ export function createWorkspaceRouter(deps: {
   sessions: AppSessionStore;
   threads: ThreadStore;
   assessmentRuns: AssessmentRunStore;
+  billing?: BillingSettingsStore;
 }): Router {
   const router = Router();
   const enter = requireAppAccess(deps);
 
   router.use(enter);
+
+  async function blockedIn(text: string): Promise<string | null> {
+    if (!deps.billing) return null;
+    const settings = await deps.billing.get();
+    return findBlockedWord(text, settings.blockedWords ?? []);
+  }
 
   router.get(
     "/home",
@@ -279,6 +286,8 @@ export function createWorkspaceRouter(deps: {
       if (title.length < 10) throw new HttpError(400, "invalid", "Give the thread a clearer title");
       if (text.length < 20) throw new HttpError(400, "invalid", "Write a bit more so people can reply");
       if (!tags.length) throw new HttpError(400, "invalid", "Pick at least one tag");
+      const blocked = (await blockedIn(`${title}\n${text}`)) ?? (await blockedIn(tags.join(" ")));
+      if (blocked) throw new HttpError(400, "blocked_word", `Please remove "${blocked}" and post again`);
       const thread = await deps.threads.create({
         id: `thr_${randomBytes(8).toString("hex")}`,
         authorId: req.accountId!,
@@ -318,6 +327,8 @@ export function createWorkspaceRouter(deps: {
       }
       const text = typeof req.body?.body === "string" ? req.body.body.trim() : "";
       if (text.length < 10) throw new HttpError(400, "invalid", "Write a reply of at least 10 characters");
+      const blockedReply = await blockedIn(text);
+      if (blockedReply) throw new HttpError(400, "blocked_word", `Please remove "${blockedReply}" and post again`);
       const thread = await deps.threads.addAnswer(req.params.id, {
         id: `ans_${randomBytes(8).toString("hex")}`,
         authorId: req.accountId!,

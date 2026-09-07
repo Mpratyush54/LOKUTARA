@@ -23,13 +23,16 @@ export function BuyNowButton({
   const [phone, setPhone] = useState("");
   const [organisation, setOrganisation] = useState("");
   const [legalAccepted, setLegalAccepted] = useState(false);
+  const [promoCode, setPromoCode] = useState("");
   useScrollLock(open);
 
   useEffect(() => {
     if (!restoreFromUrl) return;
     function syncBuy() {
       const buy = parseLandingQuery(new URLSearchParams(window.location.search)).buy;
-      setOpen(buy === sku);
+      if (buy === sku) {
+        window.location.href = `/checkout?sku=${sku}`;
+      }
     }
     syncBuy();
     window.addEventListener("popstate", syncBuy);
@@ -52,6 +55,15 @@ export function BuyNowButton({
         setOrganisation(body.account.organisation || "");
       }
     })();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        writeLandingUrl({ buy: null }, "push");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
   async function payLoggedIn() {
@@ -59,7 +71,7 @@ export function BuyNowButton({
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sku }),
+      body: JSON.stringify({ sku, promoCode: promoCode || undefined }),
     });
     const body = await res.json().catch(() => ({}));
     return { res, body };
@@ -76,6 +88,7 @@ export function BuyNowButton({
         email,
         phone,
         organisation: organisation || undefined,
+        promoCode: promoCode || undefined,
         checkoutLegalAccepted: legalAccepted,
         adultConfirmed: legalAccepted,
       }),
@@ -85,27 +98,11 @@ export function BuyNowButton({
   }
 
   async function start() {
-    setBusy(true);
-    const session = await fetch("/api/auth/me", { credentials: "include" });
-    if (session.ok) {
-      const { res, body } = await payLoggedIn();
-      setBusy(false);
-      if (res.ok && body.paymentUrl) {
-        window.location.assign(body.paymentUrl);
-        return;
-      }
-      if (res.status !== 401) {
-        showAppToast(typeof body.message === "string" ? body.message : "Could not start payment.");
-        return;
-      }
-    }
-    setBusy(false);
     if (sku === "app_access") {
       window.location.href = "/signup";
       return;
     }
-    setOpen(true);
-    writeLandingUrl({ buy: sku }, "push");
+    window.location.href = `/checkout?sku=${sku}`;
   }
 
   async function onSubmit(ev: FormEvent) {
@@ -166,6 +163,10 @@ export function BuyNowButton({
             <div className="field">
               <label htmlFor={`buy-org-${sku}`}>Organisation</label>
               <input className="input" id={`buy-org-${sku}`} value={organisation} onChange={(e) => setOrganisation(e.target.value)} placeholder="Optional" />
+            </div>
+            <div className="field">
+              <label htmlFor={`buy-promo-${sku}`}>Promo code (optional)</label>
+              <input className="input" id={`buy-promo-${sku}`} value={promoCode} onChange={(e) => setPromoCode(e.target.value.toUpperCase())} placeholder="WELCOME10" />
             </div>
             <label className="legal-check">
               <input

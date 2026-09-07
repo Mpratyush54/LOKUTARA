@@ -9,14 +9,7 @@ export type InvoiceKind = "sale" | "complimentary";
 export const COMPLIMENTARY_PAYMENT_ID = "admin_grant";
 export const COMPLIMENTARY_NOTE = "Given by Admin. Complimentary. Not a sale and not counted as revenue.";
 
-export type Invoice = {
-  id: string;
-  number: string;
-  accountId: string | null;
-  customerName: string;
-  customerEmail: string;
-  customerPhone: string | null;
-  organisation: string | null;
+export type InvoiceLine = {
   sku: InvoiceSku;
   label: string;
   qty: number;
@@ -25,6 +18,27 @@ export type Invoice = {
   subtotalPaise: number;
   gstPaise: number;
   totalPaise: number;
+};
+
+export type Invoice = {
+  id: string;
+  number: string;
+  accountId: string | null;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string | null;
+  organisation: string | null;
+  customerGstin: string | null;
+  supplyState: string | null;
+  lines: InvoiceLine[];
+  discountPaise: number;
+  promoCode: string | null;
+  /** Taxable after discount (sum of line subtotals minus discount). */
+  subtotalPaise: number;
+  gstPaise: number;
+  totalPaise: number;
+  /** Dominant / first line GST rate — used for simple displays. */
+  gstRate: number;
   currency: "INR";
   status: Exclude<InvoiceStatus, "overdue">;
   issuedAt: Date | null;
@@ -60,6 +74,84 @@ export function rupeesToPaise(rupees: number): number {
   return Math.round(rupees * 100);
 }
 
+export function normalizeGstin(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const gstin = raw.trim().toUpperCase();
+  if (!gstin) return null;
+  if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) return null;
+  return gstin;
+}
+
+export type GstTaxType = "intra" | "inter";
+
+export type GstBreakdown = {
+  type: GstTaxType;
+  cgstPaise: number;
+  sgstPaise: number;
+  igstPaise: number;
+  cgstRate: number;
+  sgstRate: number;
+  igstRate: number;
+  label: string;
+};
+
+export function resolveGstBreakdown(input: {
+  gstRate: number;
+  gstPaise: number;
+  customerGstin?: string | null;
+  supplyState?: string | null;
+  sellerStateCode?: string;
+}): GstBreakdown {
+  const sellerState = input.sellerStateCode || "29";
+  let isInterState = false;
+
+  const gstin = normalizeGstin(input.customerGstin);
+  if (gstin) {
+    const custStateCode = gstin.slice(0, 2);
+    if (custStateCode !== sellerState) {
+      isInterState = true;
+    }
+  } else if (input.supplyState) {
+    const state = input.supplyState.trim().toLowerCase();
+    const isLocal =
+      state === "karnataka" ||
+      state === "ka" ||
+      state === "bengaluru" ||
+      state === "bangalore" ||
+      state === "29";
+    if (!isLocal) {
+      isInterState = true;
+    }
+  }
+
+  const rate = Math.max(0, input.gstRate);
+  if (isInterState) {
+    return {
+      type: "inter",
+      cgstPaise: 0,
+      sgstPaise: 0,
+      igstPaise: input.gstPaise,
+      cgstRate: 0,
+      sgstRate: 0,
+      igstRate: rate,
+      label: `IGST ${rate}%`,
+    };
+  }
+
+  const cgst = Math.round(input.gstPaise / 2);
+  const sgst = input.gstPaise - cgst;
+  const halfRate = rate / 2;
+  return {
+    type: "intra",
+    cgstPaise: cgst,
+    sgstPaise: sgst,
+    igstPaise: 0,
+    cgstRate: halfRate,
+    sgstRate: halfRate,
+    label: `CGST ${halfRate}% + SGST ${halfRate}%`,
+  };
+}
+
 export function invoiceTotals(unitAmountPaise: number, qty: number, gstRate: number) {
   const safeQty = Math.max(1, Math.floor(qty));
   const safeRate = Math.max(0, Math.min(40, gstRate));
@@ -80,16 +172,86 @@ export function nextInvoiceNumber(existingNumbers: string[], now = new Date()): 
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
 
-export function lineFromSku(sku: InvoiceSku, qty: number, unitAmountPaise: number | undefined, gstRate: number) {
+export function lineFromSku(
+  sku: InvoiceSku,
+  qty: number,
+  unitAmountPaise: number | undefined,
+  gstRate: number,
+  label?: string,
+): InvoiceLine {
   const catalog = skuCatalog(sku);
   const unit = unitAmountPaise != null && Number.isFinite(unitAmountPaise) ? unitAmountPaise : catalog.unitAmountPaise;
   const totals = invoiceTotals(unit, qty, gstRate);
   return {
     sku,
-    label: catalog.label,
+    label: label?.trim() || catalog.label,
     unitAmountPaise: Math.round(unit),
     ...totals,
   };
+}
+
+/** Build priced lines, then apply an invoice-level pre-GST discount proportionally. */
+export function settleInvoiceLines(lines: InvoiceLine[], discountPaise = 0): {
+  lines: InvoiceLine[];
+  discountPaise: number;
+  subtotalPaise: number;
+  gstPaise: number;
+  totalPaise: number;
+  gstRate: number;
+} {
+  if (!lines.length) {
+    return { lines: [], discountPaise: 0, subtotalPaise: 0, gstPaise: 0, totalPaise: 0, gstRate: 0 };
+  }
+  const gross = lines.reduce((sum, line) => sum + line.subtotalPaise, 0);
+  const discount = Math.min(Math.max(0, Math.round(discountPaise)), gross);
+  let allocated = 0;
+  const settled = lines.map((line, index) => {
+    const isLast = index === lines.length - 1;
+    const share =
+      discount === 0 || gross === 0
+        ? 0
+        : isLast
+          ? discount - allocated
+          : Math.round((discount * line.subtotalPaise) / gross);
+    if (!isLast) allocated += share;
+    const taxable = Math.max(0, line.subtotalPaise - share);
+    const gstPaise = Math.round(taxable * (line.gstRate / 100));
+    return {
+      ...line,
+      subtotalPaise: taxable,
+      gstPaise,
+      totalPaise: taxable + gstPaise,
+    };
+  });
+  const subtotalPaise = settled.reduce((sum, line) => sum + line.subtotalPaise, 0);
+  const gstPaise = settled.reduce((sum, line) => sum + line.gstPaise, 0);
+  return {
+    lines: settled,
+    discountPaise: discount,
+    subtotalPaise,
+    gstPaise,
+    totalPaise: subtotalPaise + gstPaise,
+    gstRate: settled[0]?.gstRate ?? 0,
+  };
+}
+
+export function invoiceSummaryLabel(lines: InvoiceLine[]): string {
+  if (!lines.length) return "Invoice";
+  if (lines.length === 1) return lines[0].label;
+  if (lines.length === 2) return `${lines[0].label} + ${lines[1].label}`;
+  return `${lines[0].label} + ${lines.length - 1} more`;
+}
+
+export function invoicePrimarySku(lines: InvoiceLine[]): InvoiceSku | null {
+  return lines[0]?.sku ?? null;
+}
+
+export function invoiceHasSku(invoice: Pick<Invoice, "lines">, sku: InvoiceSku): boolean {
+  return invoice.lines.some((line) => line.sku === sku);
+}
+
+export function invoiceGrantsAccess(lines: InvoiceLine[]): boolean {
+  return lines.some((line) => skuGrantsAccess(line.sku));
 }
 
 export function effectiveStatus(invoice: Pick<Invoice, "status" | "dueAt">, now = new Date()): InvoiceStatus {
@@ -108,9 +270,15 @@ export function formatInrFromPaise(paise: number): string {
 export function presentInvoice(invoice: Invoice, now = new Date()) {
   const kind = invoiceKindOf(invoice);
   const complimentary = kind === "complimentary";
+  const label = invoiceSummaryLabel(invoice.lines);
+  const qty = invoice.lines.reduce((sum, line) => sum + line.qty, 0);
   return {
     ...invoice,
     kind,
+    sku: invoicePrimarySku(invoice.lines),
+    label,
+    qty,
+    unitAmountPaise: invoice.lines[0]?.unitAmountPaise ?? 0,
     status: effectiveStatus(invoice, now),
     storedStatus: invoice.status,
     issuedAt: invoice.issuedAt?.toISOString() ?? null,

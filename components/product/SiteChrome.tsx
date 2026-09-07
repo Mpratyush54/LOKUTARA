@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { LokutaraLogo } from "@/components/brand/LokutaraLogo";
 
 export type ProductNavId = "home" | "app";
 
@@ -23,8 +24,8 @@ export function SiteChrome({
     <>
       <header className="topnav">
         <div className="container topnav-inner">
-          <Link className="logo" href="/">
-            Lokutara
+          <Link className="logo" href="/" aria-label="Lokutara home">
+            <LokutaraLogo size={30} />
           </Link>
           <nav aria-label="Primary">
             {LINKS.map((link) => (

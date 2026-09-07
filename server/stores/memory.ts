@@ -7,6 +7,7 @@ import {
   type BillingSettings,
 } from "../../lib/access/billing";
 import type { Invoice } from "../../lib/billing/invoices";
+import type { Promo } from "../../lib/billing/promos";
 import { EMPTY_IDENTITY } from "../../lib/access/profile";
 import type { LocalAnswer, LocalThread, TraitScore } from "../../lib/product/workspace";
 
@@ -46,6 +47,7 @@ export type EventStore = {
 export type LeadStore = {
   insert(lead: StoredLead): Promise<StoredLead>;
   list(limit?: number): Promise<StoredLead[]>;
+  query(input: { q?: string; type?: string; limit: number; offset: number }): Promise<{ rows: StoredLead[]; total: number }>;
 };
 
 export type StoredExperimentConfig = {
@@ -122,6 +124,8 @@ export type ThreadStore = {
   addAnswer(id: string, answer: LocalAnswer): Promise<LocalThread | null>;
   incrementViews(id: string): Promise<LocalThread | null>;
   toggleUpvote(threadId: string, answerId: string, accountId: string): Promise<LocalThread | null>;
+  deleteThread(id: string): Promise<boolean>;
+  deleteAnswer(threadId: string, answerId: string): Promise<LocalThread | null>;
   anonymizeByAccount(accountId: string): Promise<void>;
 };
 
@@ -131,6 +135,14 @@ export type InvoiceStore = {
   getByPaymentLinkId(linkId: string): Promise<Invoice | null>;
   insert(invoice: Invoice): Promise<Invoice>;
   update(invoice: Invoice): Promise<Invoice>;
+};
+
+export type PromoStore = {
+  list(): Promise<Promo[]>;
+  getByCode(code: string): Promise<Promo | null>;
+  upsert(promo: Promo): Promise<Promo>;
+  incrementUse(code: string): Promise<Promo | null>;
+  remove(code: string): Promise<boolean>;
 };
 
 export type AssessmentRunStore = {
@@ -156,6 +168,7 @@ export function createMemoryStores() {
   const threads: LocalThread[] = [];
   const assessmentRuns: AssessmentRun[] = [];
   const invoices: Invoice[] = [];
+  const promos = new Map<string, Promo>();
   let billingSettings: BillingSettings = { ...DEFAULT_BILLING_SETTINGS, trialModules: { ...DEFAULT_BILLING_SETTINGS.trialModules } };
 
   const eventStore: EventStore = {
@@ -175,6 +188,22 @@ export function createMemoryStores() {
     async list(limit = 100) {
       const sorted = [...leads].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
       return sorted.slice(0, Math.max(1, Math.min(limit, 500)));
+    },
+    async query(input) {
+      const q = (input.q || "").trim().toLowerCase();
+      const type = (input.type || "").trim();
+      const sorted = [...leads]
+        .filter((lead) => {
+          if (type && lead.type !== type) return false;
+          if (!q) return true;
+          return [lead.name, lead.email, lead.phone, lead.organisation, lead.role]
+            .filter(Boolean)
+            .some((field) => String(field).toLowerCase().includes(q));
+        })
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      const limit = Math.max(1, Math.min(input.limit || 25, 100));
+      const offset = Math.max(0, input.offset || 0);
+      return { rows: sorted.slice(offset, offset + limit), total: sorted.length };
     },
   };
 
@@ -343,6 +372,20 @@ export function createMemoryStores() {
       answer.upvotes = answer.upvotedBy.length;
       return thread;
     },
+    async deleteThread(id) {
+      const index = threads.findIndex((item) => item.id === id);
+      if (index < 0) return false;
+      threads.splice(index, 1);
+      return true;
+    },
+    async deleteAnswer(threadId, answerId) {
+      const thread = threads.find((item) => item.id === threadId);
+      if (!thread) return null;
+      const index = thread.answers.findIndex((item) => item.id === answerId);
+      if (index < 0) return null;
+      thread.answers.splice(index, 1);
+      return thread;
+    },
     async anonymizeByAccount(accountId) {
       for (const thread of threads) {
         if (thread.authorId === accountId) {
@@ -404,6 +447,30 @@ export function createMemoryStores() {
     },
   };
 
+  const promoStore: PromoStore = {
+    async list() {
+      return [...promos.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+    async getByCode(code) {
+      return promos.get(code.trim().toUpperCase()) ?? null;
+    },
+    async upsert(promo) {
+      promos.set(promo.code.trim().toUpperCase(), promo);
+      return promo;
+    },
+    async incrementUse(code) {
+      const key = code.trim().toUpperCase();
+      const promo = promos.get(key);
+      if (!promo) return null;
+      const next = { ...promo, usedCount: promo.usedCount + 1 };
+      promos.set(key, next);
+      return next;
+    },
+    async remove(code) {
+      return promos.delete(code.trim().toUpperCase());
+    },
+  };
+
   return {
     events,
     leads,
@@ -422,6 +489,7 @@ export function createMemoryStores() {
     threadStore,
     assessmentRunStore,
     invoiceStore,
+    promoStore,
     invoices,
   };
 }

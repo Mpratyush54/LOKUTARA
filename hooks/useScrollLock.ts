@@ -12,6 +12,8 @@ export function useScrollLock(locked: boolean) {
     const html = document.documentElement;
     const { body } = document;
     const y = window.scrollY;
+    // Width of the disappearing page scrollbar — pad the fixed body so content doesn't shift right.
+    const scrollbarWidth = Math.max(0, window.innerWidth - html.clientWidth);
     const prev = {
       htmlOverflow: html.style.overflow,
       htmlBehavior: html.style.scrollBehavior,
@@ -21,6 +23,7 @@ export function useScrollLock(locked: boolean) {
       bodyLeft: body.style.left,
       bodyRight: body.style.right,
       bodyWidth: body.style.width,
+      bodyPaddingRight: body.style.paddingRight,
     };
     html.style.overflow = "hidden";
     html.style.scrollBehavior = "auto";
@@ -30,6 +33,7 @@ export function useScrollLock(locked: boolean) {
     body.style.left = "0";
     body.style.right = "0";
     body.style.width = "100%";
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
     return () => {
       html.style.scrollBehavior = "auto";
       html.style.overflow = prev.htmlOverflow;
@@ -39,6 +43,7 @@ export function useScrollLock(locked: boolean) {
       body.style.left = prev.bodyLeft;
       body.style.right = prev.bodyRight;
       body.style.width = prev.bodyWidth;
+      body.style.paddingRight = prev.bodyPaddingRight;
       window.scrollTo(0, y);
       html.style.scrollBehavior = prev.htmlBehavior;
     };

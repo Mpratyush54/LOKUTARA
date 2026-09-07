@@ -14,15 +14,15 @@ import {
   type LandingQuery,
 } from "@/lib/landing/urlState";
 import { skuCatalog } from "@/lib/billing/catalog";
-import { invoiceTotals, formatInrFromPaise } from "@/lib/billing/invoices";
+import { invoiceTotals, formatInrFromPaise, DEFAULT_GST_RATE } from "@/lib/billing/invoices";
 import { experimentFor, loadExperimentConfigs, submitLead, track } from "@/lib/tracking/client";
 import { useReveal } from "@/hooks/useMotion";
 import { scrollPageTo, useScrollLock } from "@/hooks/useScrollLock";
 
 type FormType = "discovery" | "counselling" | "popup";
 
-function gstTotalLabel(sku: (typeof SELL_ITEMS)[number]["sku"]) {
-  return formatInrFromPaise(invoiceTotals(skuCatalog(sku).unitAmountPaise, 1, 18).totalPaise);
+function gstTotalLabel(sku: (typeof SELL_ITEMS)[number]["sku"], rate = DEFAULT_GST_RATE) {
+  return formatInrFromPaise(invoiceTotals(skuCatalog(sku).unitAmountPaise, 1, rate).totalPaise);
 }
 
 function RevealSection({
@@ -72,7 +72,6 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
   const [ctaLabel, setCtaLabel] = useState("Book a discovery call");
   const [navOpen, setNavOpen] = useState(false);
   const [navScrolled, setNavScrolled] = useState(false);
-  const [parallax, setParallax] = useState({ y: 0, opacity: 1, visualY: 0 });
   const [paidNotice, setPaidNotice] = useState(Boolean(seed.paid));
   const [guideWho, setGuideWho] = useState(seed.who);
   const [guideNoticing, setGuideNoticing] = useState(seed.noticing);
@@ -156,27 +155,8 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
   }, [phonePaused]);
 
   useEffect(() => {
-    const reduce =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const narrow = window.matchMedia("(max-width: 920px)").matches;
     function onScroll() {
-      const y = window.scrollY;
-      setNavScrolled(y > 12);
-      if (reduce || narrow) {
-        setParallax({ y: 0, opacity: 1, visualY: 0 });
-        return;
-      }
-      const hero = document.getElementById("hero");
-      const heroH = hero?.offsetHeight || 1;
-      if (y < heroH) {
-        const p = y / heroH;
-        setParallax({
-          y: y * 0.18,
-          opacity: Math.max(0.55, 1 - p * 0.4),
-          visualY: y * 0.08,
-        });
-      }
+      setNavScrolled(window.scrollY > 12);
     }
     window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
@@ -186,6 +166,15 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
   const activePillar = PILLARS[pillar];
   const wheelRotation = -(pillar * (360 / PILLARS.length));
   const activeBooking = BOOKING_STEPS[phone];
+  const wheelAccent: Record<string, string> = {
+    connect: "var(--forest)",
+    build: "var(--accent)",
+    measure: "var(--sage)",
+    support: "#8a4f3d",
+    discovery: "#2e6b5e",
+    feedback: "var(--accent)",
+  };
+  const activeWheelColor = wheelAccent[activePillar.id] ?? "var(--accent)";
 
   function openForm(type: FormType) {
     setForm(type);
@@ -205,6 +194,31 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
     setNavOpen(false);
     const el = document.querySelector(hash);
     if (el) scrollPageTo(el);
+  }
+
+  function sendChat(raw: string) {
+    const text = raw.trim();
+    if (!text) return;
+    setChatOpen(true);
+    setChatLog((log) => [...log, { from: "user", text }]);
+    setChatInput("");
+    track("chat_widget_message");
+    const lower = text.toLowerCase();
+    const reply = lower.includes("counsel")
+      ? "For counselling, use Request counselling on the page — a psychologist replies. This space is non-emergency only."
+      : lower.includes("discover") || lower.includes("book") || lower.includes("call")
+        ? "For a discovery call, use Book a discovery call on the page — Joel or Divya confirm a slot within a business day."
+        : "Noted. Use Book a discovery call for company work, or Request counselling for individual support — a person will reply.";
+    if (chatStep === 0) {
+      setChatStep(1);
+      window.setTimeout(() => {
+        setChatLog((log) => [...log, { from: "bot", text: reply }]);
+      }, 400);
+    } else {
+      window.setTimeout(() => {
+        setChatLog((log) => [...log, { from: "bot", text: reply }]);
+      }, 400);
+    }
   }
 
   return (
@@ -261,7 +275,6 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
             <div
               ref={heroCopyRef}
               className="hero-copy reveal is-visible"
-              style={{ transform: `translateY(${parallax.y}px)`, opacity: parallax.opacity }}
             >
               <p className="eyebrow" style={{ color: "var(--forest)" }}>
                 Bengaluru · August 2026
@@ -288,7 +301,6 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
               ref={heroVisualRef}
               className="hero-visual-stage"
               aria-hidden="true"
-              style={{ transform: `translateY(${parallax.visualY}px)` }}
             >
               <div className="hero-orb hero-orb-1" />
               <div className="hero-orb hero-orb-2" />
@@ -445,7 +457,12 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
               </div>
             </div>
             <div className="approach-wheel">
-              <div className="wheel-wrap" aria-label="Lokutara pillars">
+              <div
+                className="wheel-wrap wheel-centered"
+                aria-label="Lokutara pillars"
+                style={{ ["--wheel-accent" as string]: activeWheelColor }}
+              >
+                <div className="wheel-halo" aria-hidden="true" />
                 <div className="wheel-orbit" aria-hidden="true" />
                 <div
                   className={`wheel-center${activePillar.accent === "now" ? " is-now" : " is-later"}`}
@@ -455,6 +472,7 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
                 </div>
                 <div className="wheel-ring" style={{ transform: `rotate(${wheelRotation}deg)` }}>
                   {PILLARS.map((node, i) => {
+                    // Fixed seats on the ring — only the ring rotates, so nodes visibly travel.
                     const angle = (i / PILLARS.length) * Math.PI * 2 - Math.PI / 2;
                     const r = 42;
                     return (
@@ -755,8 +773,14 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
       {form ? <LeadModal type={form} onClose={() => setForm(null)} /> : null}
 
       <div className="chatbot">
-        <div className={`chat-panel${chatOpen ? " open" : ""}`}>
-          <div className="chat-header">Lokutara</div>
+        <div className={`chat-panel${chatOpen ? " open" : ""}`} role={chatOpen ? "dialog" : undefined} aria-label="Lokutara chat">
+          <div className="chat-header">
+            <span className="chat-avatar" aria-hidden="true">L</span>
+            <span className="chat-header-text">
+              <strong>Lokutara</strong>
+              <span className="chat-online">Online · replies within a day</span>
+            </span>
+          </div>
           <div className="chat-body">
             {chatLog.map((msg, i) => (
               <div key={i} className={`chat-msg ${msg.from}`}>
@@ -764,27 +788,24 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
               </div>
             ))}
           </div>
+          {chatStep === 0 ? (
+            <div className="chat-quick">
+              <button type="button" onClick={() => sendChat("I want a discovery call")}>
+                Book discovery
+              </button>
+              <button type="button" onClick={() => sendChat("I want counselling")}>
+                Counselling
+              </button>
+            </div>
+          ) : null}
           <form
             className="chat-input-row"
             onSubmit={(e) => {
               e.preventDefault();
-              const text = chatInput.trim();
-              if (!text) return;
-              setChatLog((log) => [...log, { from: "user", text }]);
-              setChatInput("");
-              track("chat_widget_message");
-              if (chatStep === 0) {
-                setChatStep(1);
-                window.setTimeout(() => {
-                  setChatLog((log) => [
-                    ...log,
-                    { from: "bot", text: "Use Book a discovery call on the page, or Request counselling. A person will reply." },
-                  ]);
-                }, 400);
-              }
+              sendChat(chatInput.trim());
             }}
           >
-            <input className="input" value={chatInput} onChange={(e) => setChatInput(e.target.value)} aria-label="Chat message" />
+            <input className="input" value={chatInput} onChange={(e) => setChatInput(e.target.value)} aria-label="Chat message" placeholder="Type your question…" />
             <button type="submit" className="btn btn-primary">
               Send
             </button>
@@ -793,7 +814,8 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
         <button
           type="button"
           className="chat-toggle"
-          aria-label="Open chat"
+          aria-label={chatOpen ? "Close chat" : "Open chat"}
+          aria-expanded={chatOpen}
           onClick={() => {
             setChatOpen((o) => !o);
             track("chat_widget_opened");
@@ -802,9 +824,11 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path
               fill="currentColor"
-              d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4-8 5-8-5V6l8 5 8-5v2Z"
+              d="M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm3 5.5a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Zm5 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Zm5 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z"
             />
           </svg>
+          <span className="chat-toggle-label">{chatOpen ? "Close" : "Chat"}</span>
+          {!chatOpen && chatStep === 0 ? <span className="chat-toggle-dot" aria-hidden="true" /> : null}
         </button>
       </div>
     </>
@@ -814,6 +838,8 @@ export function LandingExperience({ initial }: { initial?: LandingQuery }) {
 function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
   const [error, setError] = useState("");
   const [ok, setOk] = useState(false);
+  const [leadId, setLeadId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const isCounselling = type === "counselling";
   const titleRef = useRef<HTMLHeadingElement>(null);
 
@@ -826,7 +852,7 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
     setError("");
     const data = new FormData(e.currentTarget);
     try {
-      await submitLead({
+      const result = await submitLead({
         type: type === "popup" ? "discovery" : type,
         name: data.get("name"),
         email: data.get("email"),
@@ -840,9 +866,22 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
       });
       await track("lead_submitted", { type: isCounselling ? "counselling" : "discovery" });
       if (type === "popup") await track("popup_submitted");
+      const id = typeof result?.id === "string" ? result.id : null;
+      setLeadId(id);
       setOk(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send");
+    }
+  }
+
+  async function copyId() {
+    if (!leadId) return;
+    try {
+      await navigator.clipboard.writeText(leadId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
     }
   }
 
@@ -861,7 +900,31 @@ function LeadModal({ type, onClose }: { type: FormType; onClose: () => void }) {
             : "30–45 minutes with the founders. Complimentary."}
         </p>
         {ok ? (
-          <p className="form-ok">Received. Joel or Divya will reply.</p>
+          <div className="form-success" role="status">
+            <span className="form-success-tick" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+            </span>
+            <h3>Your form has been submitted.</h3>
+            <p className="meta">Joel or Divya will reply. Keep this reference ID.</p>
+            {leadId ? (
+              <>
+                <p className="meta">This is your ID</p>
+                <code className="lead-id">{leadId}</code>
+                <div className="form-success-actions">
+                  <button type="button" className="btn btn-secondary" onClick={copyId}>
+                    {copied ? "Copied" : "Copy ID"}
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={onClose}>
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button type="button" className="btn btn-ghost" onClick={onClose} style={{ marginTop: 12 }}>
+                Done
+              </button>
+            )}
+          </div>
         ) : (
           <>
             {error ? <p className="form-error">{error}</p> : null}

@@ -4,14 +4,13 @@ import {
   ALL_MODULES_OFF,
   addDays,
   applyProfilePatch,
+  isBanned,
   presentAccount,
   type AccountRecord,
 } from "../../lib/access/billing";
 import { EMPTY_IDENTITY, isEmail, parseProfilePatch } from "../../lib/access/profile";
 import { hashPassword, verifyPassword } from "../../lib/access/password";
 import { ACCOUNT_NOTICE_VERSION } from "../../lib/legal/compliance";
-import { applyProfilePatch } from "../../lib/access/billing";
-import { EMPTY_IDENTITY, parseProfilePatch } from "../../lib/access/profile";
 import { asyncHandler, HttpError } from "../middleware/errors";
 import { APP_COOKIE, appCookieOptions, readAppToken, type AppRequest } from "../middleware/appAuth";
 import type {
@@ -253,6 +252,15 @@ export function createAuthRouter(deps: {
         privacyNoticeVersion: ACCOUNT_NOTICE_VERSION,
       };
       await deps.accounts.create(account);
+
+      // Link any prior guest invoices with this email to the new account
+      const allInvoices = await deps.invoices.list();
+      for (const inv of allInvoices) {
+        if (!inv.accountId && inv.customerEmail.toLowerCase() === email) {
+          await deps.invoices.update({ ...inv, accountId: account.id });
+        }
+      }
+
       const token = mintToken();
       await deps.sessions.create({ token, accountId: account.id, createdAt: now });
       res.cookie(APP_COOKIE, token, appCookieOptions());
@@ -275,6 +283,9 @@ export function createAuthRouter(deps: {
       const account = await deps.accounts.getByEmail(email);
       if (!account || !(await verifyPassword(password, account.passwordHash))) {
         throw new HttpError(401, "unauthorized", "Invalid email or password");
+      }
+      if (isBanned(account)) {
+        throw new HttpError(403, "banned", "This account has been banned. Get in touch if this is a mistake.");
       }
       if (typeof account.age === "number" && account.age < 18) {
         throw new HttpError(403, "adult_required", "Lokutara accounts are for adults aged 18 or older");

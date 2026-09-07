@@ -2,6 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AdminDashboard } from "./AdminDashboard";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 function json(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -223,7 +227,7 @@ describe("AdminDashboard", () => {
     expect(screen.getByRole("button", { name: "Give access" })).toBeInTheDocument();
   });
 
-  it("opens billing with the workshop catalogue", async () => {
+  it("opens billing bills and the Odoo-style new bill editor", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes("/api/admin/session")) return json({ authenticated: true, configured: true });
@@ -241,12 +245,20 @@ describe("AdminDashboard", () => {
       if (url.includes("/api/admin/accounts")) return json({ accounts: overview.recent.people });
       return json({}, 404);
     });
-    render(<AdminDashboard />);
-    fireEvent.click(await screen.findByRole("button", { name: /billing/i }));
+    render(<AdminDashboard initialTab="billing" initialBillingView="new" />);
     expect(await screen.findByTestId("admin-billing")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "New bill" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /2–3 hour workshop/i })).toBeInTheDocument();
-    expect(screen.getByText(/razorpay is not configured/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Draft").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /Product for line/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add service/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("Due date")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /export gst csv/i })).toHaveAttribute(
+      "href",
+      "/api/admin/invoices/export.csv",
+    );
+    expect(screen.queryByText(/payment links need razorpay keys/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Complimentary · Given by Admin/i)).toBeInTheDocument();
   });
 });

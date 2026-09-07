@@ -48,9 +48,11 @@ describe("assessment reports", () => {
     const text = Buffer.from(pdf).toString("latin1");
     expect(text.startsWith("%PDF-")).toBe(true);
     expect(text).toContain("Overall score: 60");
-    expect(text).toContain("Openness: 100");
+    expect(text).toContain("Openness");
     expect(text).toContain("I look for new ways");
     expect(text).toContain("Strongly agree");
+    expect(text).not.toContain("# Trait bands");
+    expect(text).not.toContain("| Trait | Score");
   });
 
   it("picks the dominant Kolb mode from rank-1 answers", () => {

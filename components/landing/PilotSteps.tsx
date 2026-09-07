@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { PILOT_STEPS } from "@/lib/landing/content";
 
 function ConnectIcon() {
@@ -80,17 +81,45 @@ function Arrow() {
 }
 
 export function PilotSteps() {
+  const trackRef = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      el.classList.add("is-live");
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            el.classList.add("is-live");
+            observer.disconnect();
+          }
+        }
+      },
+      { threshold: 0.2 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <>
       <header className="pilot-head">
         <p className="eyebrow">How a pilot works</p>
         <h2>Connect, Build, Measure, Support</h2>
       </header>
-      <ol className="pilot-track" aria-label="Four steps of a pilot">
+      <ol ref={trackRef} className="pilot-track" aria-label="Four steps of a pilot">
         {PILOT_STEPS.map((step, index) => {
           const Icon = ICONS[step.id];
           return (
-            <li key={step.id} className="pilot-item">
+            <li
+              key={step.id}
+              className="pilot-item"
+              style={{ transitionDelay: `${index * 140}ms` }}
+            >
               {index > 0 ? (
                 <span className="pilot-arrow" aria-hidden="true">
                   <Arrow />

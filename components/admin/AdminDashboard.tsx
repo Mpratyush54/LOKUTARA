@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { MetricsWindow } from "@/lib/tracking/metrics";
 import type { ExperimentKey, ExperimentVariant } from "@/lib/tracking/experiment";
@@ -8,8 +9,9 @@ import type { DayPoint } from "@/lib/charts/series";
 import type { CommerceSnapshot } from "@/lib/billing/commerce";
 import { formatInrFromPaise } from "@/lib/billing/invoices";
 import { LOCAL_ASSESSMENTS } from "@/lib/product/workspace";
-import { FunnelBars, TrendChart } from "@/components/charts/TrendChart";
+import { FunnelBars, TrendChart, CountUp, DonutChart } from "@/components/charts/TrendChart";
 import { BillingModule } from "@/components/admin/BillingModule";
+import { LokutaraLogo } from "@/components/brand/LokutaraLogo";
 
 type AdminLead = {
   id: string;
@@ -47,6 +49,8 @@ type AccountRow = {
   createdAt: string;
   access: AccessSnapshot;
   communityRole?: "student" | "specialist" | "admin";
+  banned?: boolean;
+  banReason?: string | null;
 };
 
 type OverviewPayload = {
@@ -80,7 +84,34 @@ type OverviewPayload = {
   };
 };
 
-type Tab = "overview" | "leads" | "assessments" | "community" | "trials" | "billing" | "experiments";
+type WorkspaceThread = {
+  id: string;
+  title: string;
+  body?: string;
+  authorName: string;
+  authorId?: string;
+  tags: string[];
+  views: number;
+  answerCount: number;
+  createdAt?: string;
+};
+
+type ModeratedAnswer = {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  upvotes: number;
+  createdAt: string;
+};
+
+type ModeratedThread = WorkspaceThread & {
+  answers: ModeratedAnswer[];
+};
+
+export type AdminTab = "overview" | "leads" | "assessments" | "community" | "trials" | "billing" | "experiments";
+
+export type BillingView = "bills" | "new" | "promos" | "seller";
 
 function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
@@ -123,21 +154,34 @@ async function adminFetch(path: string, init?: RequestInit) {
   return { res, body };
 }
 
-export function AdminDashboard() {
+export function AdminDashboard({
+  initialTab = "overview",
+  initialBillingView = "bills",
+}: {
+  initialTab?: AdminTab;
+  initialBillingView?: BillingView;
+} = {}) {
+  const router = useRouter();
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [configured, setConfigured] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [emailRequired, setEmailRequired] = useState(true);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<AdminTab>(initialTab);
+  const [billingView, setBillingView] = useState<BillingView>(initialBillingView);
   const [error, setError] = useState<string | null>(null);
   const [overview, setOverview] = useState<OverviewPayload | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [leads, setLeads] = useState<AdminLead[] | null>(null);
+  const [leadsQuery, setLeadsQuery] = useState("");
+  const [leadsType, setLeadsType] = useState("");
+  const [leadsPage, setLeadsPage] = useState(1);
+  const [leadsPages, setLeadsPages] = useState(1);
+  const [leadsTotal, setLeadsTotal] = useState(0);
   const [workspace, setWorkspace] = useState<{
     runs: Array<{ id: string; assessmentId: string; createdAt: string }>;
-    threads: Array<{ id: string; title: string; authorName: string; tags: string[]; views: number; answerCount: number }>;
+    threads: WorkspaceThread[];
   } | null>(null);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [billing, setBilling] = useState<BillingSettings | null>(null);
@@ -145,6 +189,34 @@ export function AdminDashboard() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [trialDays, setTrialDays] = useState(14);
   const [billingTick, setBillingTick] = useState(0);
+  const [communityQuery, setCommunityQuery] = useState("");
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [selectedThread, setSelectedThread] = useState<ModeratedThread | null>(null);
+  const [moderating, setModerating] = useState<string | null>(null);
+  const [blockedWords, setBlockedWords] = useState<string[] | null>(null);
+  const [newWord, setNewWord] = useState("");
+  const [peopleQuery, setPeopleQuery] = useState("");
+
+  const visibleAccounts = (accounts || []).filter((row) => {
+    const q = peopleQuery.trim().toLowerCase();
+    if (!q) return true;
+    return `${row.name} ${row.email} ${row.city ?? ""} ${row.organisation ?? ""}`.toLowerCase().includes(q);
+  });
+
+  async function loadLeads(page: number, q: string, type: string) {
+    const params = new URLSearchParams({ limit: "25", page: String(page) });
+    if (q.trim()) params.set("q", q.trim());
+    if (type) params.set("type", type);
+    const { res, body } = await adminFetch(`/api/admin/leads?${params.toString()}`);
+    if (!res.ok) {
+      setError(body.message || "Could not load leads");
+      return;
+    }
+    setLeads(body.leads || []);
+    setLeadsTotal(body.total ?? (body.leads || []).length);
+    setLeadsPages(body.pages ?? 1);
+    setLeadsPage(body.page ?? page);
+  }
 
   const checkSession = useCallback(async () => {
     const { res, body } = await adminFetch("/api/admin/session");
@@ -185,15 +257,18 @@ export function AdminDashboard() {
   useEffect(() => {
     if (!authed) return;
     if (tab === "leads" && leads === null) {
-      void (async () => {
-        const { res, body } = await adminFetch("/api/admin/leads?limit=50");
-        if (res.ok) setLeads(body.leads || []);
-      })();
+      void loadLeads(1, "", "");
     }
     if ((tab === "assessments" || tab === "community") && workspace === null) {
       void (async () => {
         const { res, body } = await adminFetch("/api/admin/workspace");
         if (res.ok) setWorkspace(body);
+      })();
+    }
+    if (tab === "community" && blockedWords === null) {
+      void (async () => {
+        const { res, body } = await adminFetch("/api/admin/billing");
+        if (res.ok) setBlockedWords(body.settings?.blockedWords ?? []);
       })();
     }
     if ((tab === "trials" || tab === "billing") && (accounts === null || billing === null)) {
@@ -212,7 +287,7 @@ export function AdminDashboard() {
         if (res.ok) setExperiments(body.experiments || []);
       })();
     }
-  }, [authed, tab, leads, workspace, accounts, billing, experiments]);
+  }, [authed, tab, leads, workspace, accounts, billing, experiments, blockedWords]);
 
   async function onLogin(ev: FormEvent) {
     ev.preventDefault();
@@ -235,10 +310,20 @@ export function AdminDashboard() {
     setOverview(null);
     setOverviewLoading(true);
     setLeads(null);
+    setLeadsQuery("");
+    setLeadsType("");
+    setLeadsPage(1);
+    setLeadsPages(1);
+    setLeadsTotal(0);
     setWorkspace(null);
     setAccounts(null);
     setBilling(null);
     setExperiments(null);
+    setSelectedThreadId(null);
+    setSelectedThread(null);
+    setCommunityQuery("");
+    setBlockedWords(null);
+    setNewWord("");
   }
 
   async function saveExperiment(row: ExperimentRow, patch: Partial<ExperimentRow>) {
@@ -296,22 +381,152 @@ export function AdminDashboard() {
     setAccounts((prev) => (prev || []).map((row) => (row.id === id ? body.account : row)));
   }
 
+  async function setBanned(id: string, banned: boolean) {
+    let reason = "";
+    if (banned) {
+      const input = window.prompt("Ban reason (shown to nobody, stored for records):", "");
+      if (input === null) return;
+      reason = input;
+    } else if (!window.confirm("Unban this account? They will still need access granted to enter the app.")) {
+      return;
+    }
+    const { res, body } = await adminFetch(`/api/admin/accounts/${id}/access`, {
+      method: "POST",
+      body: JSON.stringify({ action: banned ? "ban" : "unban", reason }),
+    });
+    if (!res.ok) {
+      setError(body.message || "Could not update ban");
+      return;
+    }
+    setAccounts((prev) => (prev || []).map((row) => (row.id === id ? body.account : row)));
+    void loadOverview();
+  }
+
+  async function saveBlockedWords(next: string[]) {
+    setError(null);
+    const current = billing
+      ? { ...billing }
+      : { autoTrialOnSignup: true, defaultTrialDays: trialDays, trialModules: { assessments: true, community: true } };
+    const { res, body } = await adminFetch("/api/admin/billing", {
+      method: "PUT",
+      body: JSON.stringify({ ...current, blockedWords: next }),
+    });
+    if (!res.ok) {
+      setError(body.message || "Could not save blocked words");
+      return;
+    }
+    setBlockedWords(body.settings?.blockedWords ?? next);
+    if (billing) setBilling(body.settings);
+  }
+
+  async function openThreadForModeration(id: string) {
+    setSelectedThreadId(id);
+    setSelectedThread(null);
+    setError(null);
+    const { res, body } = await adminFetch(`/api/admin/threads/${id}`);
+    if (!res.ok) {
+      setError(body.message || "Could not open thread");
+      return;
+    }
+    setSelectedThread(body.thread as ModeratedThread);
+  }
+
+  async function removeThread(id: string) {
+    if (!window.confirm("Delete this thread and all its replies? This cannot be undone.")) return;
+    setModerating(id);
+    setError(null);
+    const { res, body } = await adminFetch(`/api/admin/threads/${id}`, { method: "DELETE" });
+    setModerating(null);
+    if (!res.ok) {
+      setError(body.message || "Could not delete thread");
+      return;
+    }
+    setWorkspace((prev) =>
+      prev ? { ...prev, threads: prev.threads.filter((thread) => thread.id !== id) } : prev,
+    );
+    if (selectedThreadId === id) {
+      setSelectedThreadId(null);
+      setSelectedThread(null);
+    }
+    void loadOverview();
+  }
+
+  async function removeAnswer(threadId: string, answerId: string) {
+    if (!window.confirm("Delete this reply? This cannot be undone.")) return;
+    setModerating(answerId);
+    setError(null);
+    const { res, body } = await adminFetch(`/api/admin/threads/${threadId}/answers/${answerId}`, {
+      method: "DELETE",
+    });
+    setModerating(null);
+    if (!res.ok) {
+      setError(body.message || "Could not delete reply");
+      return;
+    }
+    if (body.thread) setSelectedThread(body.thread as ModeratedThread);
+    setWorkspace((prev) =>
+      prev
+        ? {
+            ...prev,
+            threads: prev.threads.map((thread) =>
+              thread.id === threadId
+                ? { ...thread, answerCount: Math.max(0, thread.answerCount - 1) }
+                : thread,
+            ),
+          }
+        : prev,
+    );
+    void loadOverview();
+  }
+
+  const filteredThreads = (workspace?.threads || []).filter((thread) => {
+    const q = communityQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      thread.title.toLowerCase().includes(q) ||
+      (thread.body || "").toLowerCase().includes(q) ||
+      thread.authorName.toLowerCase().includes(q) ||
+      thread.tags.some((tag) => tag.toLowerCase().includes(q))
+    );
+  });
+
+  const NAV: Array<{ id: AdminTab; label: string; count?: string }> = [
+    { id: "overview", label: "Overview" },
+    { id: "leads", label: "Leads", count: overview ? String(overview.metrics.funnel.leadsSubmitted) : undefined },
+    { id: "assessments", label: "Assessments", count: overview ? String(overview.workspace.runs) : undefined },
+    { id: "community", label: "Community", count: overview ? String(overview.workspace.threads) : undefined },
+    {
+      id: "billing",
+      label: "Billing",
+      count: overview ? formatInrFromPaise(overview.commerce?.revenueThisMonth || 0) : undefined,
+    },
+    { id: "trials", label: "People", count: overview ? String(overview.accounts.total) : undefined },
+    { id: "experiments", label: "Experiments" },
+  ];
+
+  function goTab(id: AdminTab) {
+    setTab(id);
+    router.push(`/admin/${id}`);
+  }
+
+  function goBilling(view: BillingView) {
+    setTab("billing");
+    setBillingView(view);
+    router.push(view === "bills" ? "/admin/billing" : `/admin/billing/${view}`);
+  }
+
   if (authed === null) {
     return (
       <main className="admin-shell admin-ops" aria-busy="true" data-testid="admin-skeleton">
-        <div className="admin-skeleton-page">
-          <div className="admin-skeleton admin-skeleton-title" />
-          <div className="admin-stat-grid">
-            <div className="admin-skeleton admin-skeleton-stat" />
-            <div className="admin-skeleton admin-skeleton-stat" />
-            <div className="admin-skeleton admin-skeleton-stat" />
-            <div className="admin-skeleton admin-skeleton-stat" />
-            <div className="admin-skeleton admin-skeleton-stat" />
-            <div className="admin-skeleton admin-skeleton-stat" />
-          </div>
-          <div className="chart-grid">
-            <div className="admin-skeleton admin-skeleton-chart" />
-            <div className="admin-skeleton admin-skeleton-chart" />
+        <div className="admin-login-wrap">
+          <LokutaraLogo size={40} subtitle="Founder console" />
+          <div className="admin-skeleton-page" style={{ width: "100%" }}>
+            <div className="admin-skeleton admin-skeleton-title" />
+            <div className="admin-stat-grid">
+              <div className="admin-skeleton admin-skeleton-stat" />
+              <div className="admin-skeleton admin-skeleton-stat" />
+              <div className="admin-skeleton admin-skeleton-stat" />
+            </div>
           </div>
         </div>
       </main>
@@ -321,13 +536,16 @@ export function AdminDashboard() {
   if (!configured) {
     return (
       <main className="admin-shell">
-        <div className="admin-gate">
-          <p className="eyebrow">Lokutara admin</p>
-          <h1>Dashboard locked</h1>
-          <p className="lead">
-            Set <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> in <code>.env.local</code>, restart{" "}
-            <code>npm run dev</code>, then return here.
-          </p>
+        <div className="admin-login-wrap">
+          <LokutaraLogo size={44} subtitle="Founder console" />
+          <div className="admin-gate admin-card">
+            <p className="eyebrow">Lokutara admin</p>
+            <h1>Dashboard locked</h1>
+            <p className="lead">
+              Set <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> in <code>.env.local</code>, restart{" "}
+              <code>npm run dev</code>, then return here.
+            </p>
+          </div>
         </div>
       </main>
     );
@@ -336,25 +554,29 @@ export function AdminDashboard() {
   if (!authed) {
     return (
       <main className="admin-shell">
-        <form className="admin-gate dash-in" onSubmit={onLogin}>
-          <p className="eyebrow">Founder ops</p>
-          <h1>Lokutara admin</h1>
-          <p className="lead">Sign in to see leads, signups, assessment runs, and community activity.</p>
-          {emailRequired ? (
+        <div className="admin-login-wrap">
+          <LokutaraLogo size={44} subtitle="Founder console" />
+          <form className="admin-gate admin-card dash-in" onSubmit={onLogin}>
+            <p className="eyebrow">Founder ops</p>
+            <h1>Lokutara admin</h1>
+            <p className="lead">Sign in to see leads, signups, assessment runs, billing, and community moderation.</p>
+            {emailRequired ? (
+              <label className="admin-field">
+                <span className="meta">Email</span>
+                <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </label>
+            ) : null}
             <label className="admin-field">
-              <span className="meta">Email</span>
-              <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              <span className="meta">Password</span>
+              <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             </label>
-          ) : null}
-          <label className="admin-field">
-            <span className="meta">Password</span>
-            <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          </label>
-          {loginError ? <p className="admin-error">{loginError}</p> : null}
-          <button type="submit" className="btn btn-primary admin-gate-submit">
-            Open console
-          </button>
-        </form>
+            {loginError ? <p className="admin-error">{loginError}</p> : null}
+            <button type="submit" className="btn btn-primary admin-gate-submit">
+              Open console
+            </button>
+            <p className="meta">Protected by rate limits · httpOnly session cookie · 7-day expiry.</p>
+          </form>
+        </div>
       </main>
     );
   }
@@ -381,59 +603,78 @@ export function AdminDashboard() {
       : `${fmt(metrics.sessions)} sessions in 30 days · ${pct(metrics.funnel.conversionRate)} visitor-to-lead · bounce ${pct(metrics.bounceRate)}.`;
 
   return (
-    <main className="admin-shell admin-ops">
-      <header className="admin-top dash-in">
-        <div>
-          <p className="eyebrow">Founder</p>
-          <h1>Admin dashboard</h1>
-          <p className="lead">{snapshotLine}</p>
-        </div>
-        <div className="admin-top-actions">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => {
-              if (tab === "overview") void loadOverview();
-              if (tab === "leads") setLeads(null);
-              if (tab === "assessments" || tab === "community") setWorkspace(null);
-              if (tab === "trials") {
-                setAccounts(null);
-                setBilling(null);
-              }
-              if (tab === "billing") {
-                setAccounts(null);
-                setBillingTick((n) => n + 1);
-              }
-              if (tab === "experiments") setExperiments(null);
-            }}
-          >
-            Refresh
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => void onLogout()}>
-            Sign out
-          </button>
-        </div>
-      </header>
+    <main className="admin-shell admin-ops admin-dash">
+      <div className="admin-dash-grid">
+        <aside className="admin-side" aria-label="Admin navigation">
+          <LokutaraLogo size={34} subtitle="Founder console" />
+          <nav className="admin-tabs admin-tabs-vertical" aria-label="Ops sections">
+            {NAV.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={tab === item.id ? "is-active" : undefined}
+                onClick={() => goTab(item.id)}
+              >
+                <span>{item.label}</span>
+                {item.count ? <span className="admin-nav-count">{item.count}</span> : null}
+              </button>
+            ))}
+          </nav>
+          <nav className="admin-side-links" aria-label="Product">
+            <a href="/">View website</a>
+            <a href="/app">Open app</a>
+            <a href="/app/billing">App billing</a>
+            <a href="/app/community">App community</a>
+          </nav>
+          <div className="admin-side-foot">
+            <button type="button" className="btn btn-ghost" onClick={() => void onLogout()}>
+              Sign out
+            </button>
+          </div>
+        </aside>
+        <div className="admin-main">
+          <header className="admin-top dash-in">
+            <div>
+              <p className="eyebrow">Founder</p>
+              <h1>Admin dashboard</h1>
+              <p className="lead">{snapshotLine}</p>
+            </div>
+            <div className="admin-top-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  if (tab === "overview") void loadOverview();
+                  if (tab === "leads") {
+                    setLeads(null);
+                    void loadLeads(1, leadsQuery, leadsType);
+                    setLeadsPage(1);
+                  }
+                  if (tab === "assessments" || tab === "community") {
+                    setWorkspace(null);
+                    setSelectedThreadId(null);
+                    setSelectedThread(null);
+                  }
+                  if (tab === "trials") {
+                    setAccounts(null);
+                    setBilling(null);
+                  }
+                  if (tab === "billing") {
+                    setAccounts(null);
+                    setBillingTick((n) => n + 1);
+                  }
+                  if (tab === "experiments") setExperiments(null);
+                }}
+              >
+                Refresh
+              </button>
+              <button type="button" className="btn btn-ghost admin-signout-inline" onClick={() => void onLogout()}>
+                Sign out
+              </button>
+            </div>
+          </header>
 
-      <nav className="admin-tabs" aria-label="Ops sections">
-        {(
-          [
-            ["overview", "Overview"],
-            ["leads", overview ? `Leads (${overview.metrics.funnel.leadsSubmitted})` : "Leads"],
-            ["assessments", overview ? `Assessments (${overview.workspace.runs})` : "Assessments"],
-            ["community", overview ? `Community (${overview.workspace.threads})` : "Community"],
-            ["billing", overview ? `Billing (${formatInrFromPaise(overview.commerce?.revenueThisMonth || 0)})` : "Billing"],
-            ["trials", overview ? `People (${overview.accounts.total})` : "People"],
-            ["experiments", "Experiments"],
-          ] as const
-        ).map(([id, label]) => (
-          <button key={id} type="button" className={tab === id ? "is-active" : undefined} onClick={() => setTab(id as Tab)}>
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {error ? <p className="admin-error">{error}</p> : null}
+          {error ? <p className="admin-error">{error}</p> : null}
 
       {tab === "overview" ? (
         <section className="admin-panel" data-testid="admin-overview">
@@ -486,29 +727,29 @@ export function AdminDashboard() {
                 <div className="admin-commerce dash-in delay-1">
                   <article>
                     <p className="meta">Revenue today</p>
-                    <p className="admin-big">{formatInrFromPaise(commerce.revenueToday)}</p>
+                    <p className="admin-big"><CountUp value={commerce.revenueToday} format={(n) => formatInrFromPaise(Math.round(n))} /></p>
                     <p className="meta">IST calendar day</p>
                   </article>
                   <article>
                     <p className="meta">This month</p>
-                    <p className="admin-big">{formatInrFromPaise(commerce.revenueThisMonth)}</p>
+                    <p className="admin-big"><CountUp value={commerce.revenueThisMonth} format={(n) => formatInrFromPaise(Math.round(n))} /></p>
                     <p className="meta">{momLabel(commerce.momRevenuePct)}</p>
                   </article>
                   <article>
                     <p className="meta">Last month</p>
-                    <p className="admin-big">{formatInrFromPaise(commerce.revenueLastMonth)}</p>
+                    <p className="admin-big"><CountUp value={commerce.revenueLastMonth} format={(n) => formatInrFromPaise(Math.round(n))} /></p>
                     <p className="meta">{fmt(commerce.paidThisMonth)} paid bills this month</p>
                   </article>
                   <article>
                     <p className="meta">People this month</p>
-                    <p className="admin-big">{fmt(commerce.peopleThisMonth)}</p>
+                    <p className="admin-big"><CountUp value={commerce.peopleThisMonth} format={(n) => fmt(Math.round(n))} /></p>
                     <p className="meta">
                       {fmt(commerce.peopleLastMonth)} last month · {fmt(commerce.visitorsThisMonth)} visitors
                     </p>
                   </article>
                   <article>
                     <p className="meta">Outstanding</p>
-                    <p className="admin-big">{formatInrFromPaise(commerce.outstandingPaise)}</p>
+                    <p className="admin-big"><CountUp value={commerce.outstandingPaise} format={(n) => formatInrFromPaise(Math.round(n))} /></p>
                     <p className="meta">{fmt(commerce.leadsThisMonth)} leads this month</p>
                   </article>
                 </div>
@@ -517,13 +758,13 @@ export function AdminDashboard() {
               {overview.accounts.expired > 0 || overview.accounts.none > 0 || metrics.uniqueVisitors === 0 ? (
                 <div className="admin-attention dash-in delay-1">
                   {overview.accounts.expired > 0 ? (
-                    <button type="button" className="admin-flag" onClick={() => setTab("trials")}>
+                    <button type="button" className="admin-flag" onClick={() => goTab("trials")}>
                       <strong>{fmt(overview.accounts.expired)} expired</strong>
                       <span>Restore trial or give complimentary access on People.</span>
                     </button>
                   ) : null}
                   {overview.accounts.none > 0 ? (
-                    <button type="button" className="admin-flag" onClick={() => setTab("trials")}>
+                    <button type="button" className="admin-flag" onClick={() => goTab("trials")}>
                       <strong>{fmt(overview.accounts.none)} without access</strong>
                       <span>These accounts cannot enter the app yet.</span>
                     </button>
@@ -538,12 +779,12 @@ export function AdminDashboard() {
               ) : null}
 
               <div className="admin-stat-grid dash-in delay-1">
-                <Stat label="Visitors" value={fmt(metrics.uniqueVisitors)} hint={`${fmt(metrics.dau)} today · ${fmt(metrics.mau)} / 30d`} />
-                <Stat label="Page views" value={fmt(metrics.pageViews)} hint={`${(metrics.pagesPerSession ?? 0).toFixed(1)} per session`} />
-                <Stat label="Leads" value={fmt(metrics.funnel.leadsSubmitted)} hint={`${pct(metrics.funnel.conversionRate)} conversion`} />
-                <Stat label="People" value={fmt(overview.accounts.total)} hint={`${overview.accounts.trial} trial · ${overview.accounts.paid} paid`} />
-                <Stat label="Screens" value={fmt(overview.workspace.runs)} hint="assessment completions" />
-                <Stat label="Community" value={fmt(overview.workspace.threads)} hint={`${fmt(overview.workspace.replies)} replies`} />
+                <Stat label="Visitors" value={fmt(metrics.uniqueVisitors)} hint={`${fmt(metrics.dau)} today · ${fmt(metrics.mau)} / 30d`} raw={metrics.uniqueVisitors} />
+                <Stat label="Page views" value={fmt(metrics.pageViews)} hint={`${(metrics.pagesPerSession ?? 0).toFixed(1)} per session`} raw={metrics.pageViews} />
+                <Stat label="Leads" value={fmt(metrics.funnel.leadsSubmitted)} hint={`${pct(metrics.funnel.conversionRate)} conversion`} raw={metrics.funnel.leadsSubmitted} />
+                <Stat label="People" value={fmt(overview.accounts.total)} hint={`${overview.accounts.trial} trial · ${overview.accounts.paid} paid`} raw={overview.accounts.total} />
+                <Stat label="Screens" value={fmt(overview.workspace.runs)} hint="assessment completions" raw={overview.workspace.runs} />
+                <Stat label="Community" value={fmt(overview.workspace.threads)} hint={`${fmt(overview.workspace.replies)} replies`} raw={overview.workspace.threads} />
               </div>
 
               <div className="admin-split dash-in delay-2">
@@ -572,7 +813,7 @@ export function AdminDashboard() {
                               <span className="num">{fmt(source.visitors)}</span>
                             </div>
                             <div className="funnel-track" aria-hidden="true">
-                              <span style={{ width: `${Math.max(8, (source.visitors / max) * 100)}%` }} />
+                              <span className="funnel-fill-animated" style={{ width: `${Math.max(8, (source.visitors / max) * 100)}%` }} />
                             </div>
                           </li>
                         );
@@ -589,13 +830,30 @@ export function AdminDashboard() {
                 <TrendChart points={overview.series} valueKey="leads" label="Leads · 14 days" />
                 <TrendChart points={overview.series} valueKey="revenue" label="Revenue · 14 days" />
                 <TrendChart points={overview.series} valueKey="signups" label="Signups · 14 days" />
+                <DonutChart
+                  label="People mix"
+                  segments={[
+                    { label: "Trial", value: overview.accounts.trial, color: "var(--sage)" },
+                    { label: "Paid", value: overview.accounts.paid, color: "var(--forest)" },
+                    { label: "Expired", value: overview.accounts.expired, color: "var(--accent)" },
+                    { label: "No access", value: overview.accounts.none, color: "var(--sand)" },
+                  ]}
+                />
+                <DonutChart
+                  label="Workspace mix"
+                  segments={[
+                    { label: "Screens", value: overview.workspace.runs, color: "var(--forest)" },
+                    { label: "Threads", value: overview.workspace.threads, color: "var(--accent)" },
+                    { label: "Replies", value: overview.workspace.replies, color: "var(--sage)" },
+                  ]}
+                />
               </div>
 
               <div className="admin-activity dash-in delay-3">
                 <ActivityList
                   title="Latest people"
                   empty="No signups yet. New accounts from /signup appear here."
-                  onViewAll={() => setTab("trials")}
+                  onViewAll={() => goTab("trials")}
                   items={recentPeople.map((person) => ({
                     key: person.id,
                     title: person.name,
@@ -608,7 +866,7 @@ export function AdminDashboard() {
                 <ActivityList
                   title="Latest leads"
                   empty="No enquiry forms yet."
-                  onViewAll={() => setTab("leads")}
+                  onViewAll={() => goTab("leads")}
                   items={recentLeads.map((lead) => ({
                     key: lead.id,
                     title: lead.name,
@@ -619,7 +877,7 @@ export function AdminDashboard() {
                 <ActivityList
                   title="Latest screens"
                   empty="No assessment completions yet."
-                  onViewAll={() => setTab("assessments")}
+                  onViewAll={() => goTab("assessments")}
                   items={recentRuns.map((run) => ({
                     key: run.id,
                     title: assessmentTitle(run.assessmentId),
@@ -629,7 +887,7 @@ export function AdminDashboard() {
                 <ActivityList
                   title="Latest threads"
                   empty="No community threads yet."
-                  onViewAll={() => setTab("community")}
+                  onViewAll={() => goTab("community")}
                   items={recentThreads.map((thread) => ({
                     key: thread.id,
                     title: thread.title,
@@ -646,7 +904,7 @@ export function AdminDashboard() {
                 <ActivityList
                   title="Latest bills"
                   empty="No invoices yet. Issue a workshop bill from Billing."
-                  onViewAll={() => setTab("billing")}
+                  onViewAll={() => goBilling("bills")}
                   items={recentInvoices.map((invoice) => ({
                     key: invoice.id,
                     title: `${invoice.number} · ${invoice.customerName}`,
@@ -665,44 +923,102 @@ export function AdminDashboard() {
       ) : null}
 
       {tab === "leads" ? (
-        <section className="admin-panel">
+        <section className="admin-panel" data-testid="admin-leads">
           <div className="admin-card-head">
-            <h2 className="admin-h2">Leads {leads ? `(${leads.length})` : ""}</h2>
+            <h2 className="admin-h2">Leads{leadsTotal > 0 ? ` (${leadsTotal})` : ""}</h2>
           </div>
+          <form
+            className="admin-moderation-tools admin-lead-filters"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setLeadsPage(1);
+              void loadLeads(1, leadsQuery, leadsType);
+            }}
+          >
+            <input
+              type="search"
+              className="input"
+              placeholder="Search name, email, phone, org"
+              value={leadsQuery}
+              onChange={(e) => setLeadsQuery(e.target.value)}
+              aria-label="Search leads"
+            />
+            <select
+              className="input"
+              value={leadsType}
+              onChange={(e) => {
+                setLeadsType(e.target.value);
+                setLeadsPage(1);
+                void loadLeads(1, leadsQuery, e.target.value);
+              }}
+              aria-label="Filter leads by type"
+            >
+              <option value="">All types</option>
+              <option value="discovery">Discovery</option>
+              <option value="counselling">Counselling</option>
+              <option value="popup">Popup</option>
+            </select>
+            <button type="submit" className="btn btn-secondary">
+              Search
+            </button>
+          </form>
           {!leads ? (
             <div className="admin-skeleton" />
           ) : !leads.length ? (
-            <p className="admin-empty">No leads stored yet.</p>
+            <p className="admin-empty">No leads match. Clear the search to see everything.</p>
           ) : (
-            <div className="admin-table-wrap">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Type</th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Phone</th>
-                    <th>Org</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leads.map((lead) => (
-                    <tr key={lead.id}>
-                      <td className="meta">{when(lead.createdAt)}</td>
-                      <td>
-                        <span className="admin-pill">{lead.type}</span>
-                        {lead.redacted ? <span className="meta"> · masked</span> : null}
-                      </td>
-                      <td>{lead.name}</td>
-                      <td>{lead.email}</td>
-                      <td>{lead.phone}</td>
-                      <td>{lead.organisation || "—"}</td>
+            <>
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>Type</th>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Phone</th>
+                      <th>Org</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {leads.map((lead) => (
+                      <tr key={lead.id}>
+                        <td className="meta">{when(lead.createdAt)}</td>
+                        <td>
+                          <span className="admin-pill">{lead.type}</span>
+                          {lead.redacted ? <span className="meta"> · masked</span> : null}
+                        </td>
+                        <td>{lead.name}</td>
+                        <td>{lead.email}</td>
+                        <td>{lead.phone}</td>
+                        <td>{lead.organisation || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="admin-pagination">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={leadsPage <= 1}
+                  onClick={() => void loadLeads(leadsPage - 1, leadsQuery, leadsType)}
+                >
+                  ← Prev
+                </button>
+                <span className="meta">
+                  Page {leadsPage} of {leadsPages} · {leadsTotal} total
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={leadsPage >= leadsPages}
+                  onClick={() => void loadLeads(leadsPage + 1, leadsQuery, leadsType)}
+                >
+                  Next →
+                </button>
+              </div>
+            </>
           )}
         </section>
       ) : null}
@@ -742,36 +1058,199 @@ export function AdminDashboard() {
       ) : null}
 
       {tab === "community" ? (
-        <section className="admin-panel">
+        <section className="admin-panel" data-testid="admin-community">
           <div className="admin-card-head">
-            <h2 className="admin-h2">Community {workspace ? `(${workspace.threads.length})` : ""}</h2>
+            <h2 className="admin-h2">Community moderation {workspace ? `(${workspace.threads.length})` : ""}</h2>
+          </div>
+          <p className="lead admin-hint">
+            Search threads, open one to read the full body and replies, then delete a thread or an individual reply.
+            Deletes are permanent and flow to the app immediately. Banning happens on People.
+          </p>
+          <div className="admin-card admin-blocked-words">
+            <div className="admin-card-head">
+              <h3 className="admin-h2" style={{ fontSize: 18 }}>Blocked words</h3>
+            </div>
+            <p className="meta">Posts and replies containing these whole words are rejected. {blockedWords === null ? "Loading…" : `${blockedWords.length} word${blockedWords.length === 1 ? "" : "s"}.`}</p>
+            {blockedWords && blockedWords.length ? (
+              <div className="tag-row" style={{ marginTop: 8 }}>
+                {blockedWords.map((word) => (
+                  <span key={word} className="tag tag-static">
+                    {word}
+                    <button
+                      type="button"
+                      className="admin-text-btn"
+                      aria-label={`Remove blocked word ${word}`}
+                      onClick={() => void saveBlockedWords(blockedWords.filter((w) => w !== word))}
+                      style={{ marginLeft: 6 }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <form
+              className="admin-blocked-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const word = newWord.trim().toLowerCase();
+                if (!word || !blockedWords) return;
+                if (blockedWords.includes(word)) {
+                  setNewWord("");
+                  return;
+                }
+                setNewWord("");
+                void saveBlockedWords([...blockedWords, word]);
+              }}
+            >
+              <input
+                className="input"
+                value={newWord}
+                onChange={(e) => setNewWord(e.target.value)}
+                placeholder="Add a word"
+                aria-label="Add a blocked word"
+                maxLength={40}
+              />
+              <button type="submit" className="btn btn-secondary" disabled={!newWord.trim() || blockedWords === null}>
+                Add
+              </button>
+            </form>
+          </div>
+          <div className="admin-moderation-tools">
+            <input
+              type="search"
+              className="input"
+              placeholder="Search title, body, author, or tag"
+              value={communityQuery}
+              onChange={(e) => setCommunityQuery(e.target.value)}
+              aria-label="Search community threads"
+            />
           </div>
           {!workspace ? (
             <div className="admin-skeleton" />
           ) : !workspace.threads.length ? (
             <p className="admin-empty">No community threads yet. Questions asked in the app appear here.</p>
+          ) : filteredThreads.length === 0 ? (
+            <p className="admin-empty">No threads match “{communityQuery}”. Clear the search to see everything.</p>
           ) : (
-            <div className="admin-table-wrap">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Thread</th>
-                    <th>Author</th>
-                    <th>Replies</th>
-                    <th>Views</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workspace.threads.map((thread) => (
-                    <tr key={thread.id}>
-                      <td>{thread.title}</td>
-                      <td>{thread.authorName}</td>
-                      <td className="num">{thread.answerCount}</td>
-                      <td className="num">{thread.views}</td>
+            <div className="admin-mod-grid">
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Thread</th>
+                      <th>Author</th>
+                      <th>Replies</th>
+                      <th>Views</th>
+                      <th>Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredThreads.map((thread) => (
+                      <tr key={thread.id} className={selectedThreadId === thread.id ? "is-selected" : undefined}>
+                        <td>
+                          <button
+                            type="button"
+                            className="admin-text-btn admin-thread-link"
+                            onClick={() => void openThreadForModeration(thread.id)}
+                          >
+                            {thread.title}
+                          </button>
+                          {thread.body ? (
+                            <p className="meta">{thread.body.slice(0, 120)}{thread.body.length > 120 ? "…" : ""}</p>
+                          ) : null}
+                          {thread.tags.length ? (
+                            <p className="meta">{thread.tags.join(" · ")}</p>
+                          ) : null}
+                        </td>
+                        <td>{thread.authorName}</td>
+                        <td className="num">{thread.answerCount}</td>
+                        <td className="num">{thread.views}</td>
+                        <td className="admin-row-actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void openThreadForModeration(thread.id)}
+                          >
+                            Open
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            disabled={moderating === thread.id}
+                            onClick={() => void removeThread(thread.id)}
+                          >
+                            {moderating === thread.id ? "Deleting…" : "Delete"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="admin-card admin-thread-detail">
+                {!selectedThreadId ? (
+                  <p className="admin-empty">Select Open on a thread to read and moderate it here.</p>
+                ) : !selectedThread ? (
+                  <p className="meta">Loading thread…</p>
+                ) : (
+                  <>
+                    <div className="admin-card-head">
+                      <h3 className="admin-h2" style={{ fontSize: 20 }}>{selectedThread.title}</h3>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        disabled={moderating === selectedThread.id}
+                        onClick={() => void removeThread(selectedThread.id)}
+                      >
+                        {moderating === selectedThread.id ? "Deleting…" : "Delete thread"}
+                      </button>
+                    </div>
+                    <p className="meta">
+                      {selectedThread.authorName} · {selectedThread.views} views ·{" "}
+                      {selectedThread.createdAt ? when(selectedThread.createdAt) : "—"}
+                    </p>
+                    <p>{selectedThread.body}</p>
+                    {selectedThread.tags.length ? (
+                      <div className="tag-row">
+                        {selectedThread.tags.map((tag) => (
+                          <span key={tag} className="tag tag-static">{tag}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <h4 className="admin-h2" style={{ fontSize: 18, marginTop: 16 }}>
+                      Replies ({selectedThread.answers.length})
+                    </h4>
+                    {selectedThread.answers.length === 0 ? (
+                      <p className="admin-empty">No replies yet.</p>
+                    ) : (
+                      <ul className="admin-activity-list">
+                        {selectedThread.answers.map((answer) => (
+                          <li key={answer.id}>
+                            <div className="admin-activity-row">
+                              <div>
+                                <strong>{answer.authorName}</strong>
+                                <p>{answer.body}</p>
+                                <p className="meta">
+                                  {answer.upvotes} upvotes · {when(answer.createdAt)}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                disabled={moderating === answer.id}
+                                onClick={() => void removeAnswer(selectedThread.id, answer.id)}
+                              >
+                                {moderating === answer.id ? "Deleting…" : "Delete"}
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -784,11 +1263,21 @@ export function AdminDashboard() {
           ) : (
             <>
               <div className="admin-card-head">
-                <h2 className="admin-h2">People ({accounts.length})</h2>
+                <h2 className="admin-h2">People ({visibleAccounts.length}{accounts && visibleAccounts.length !== accounts.length ? ` of ${accounts.length}` : ""})</h2>
               </div>
               <p className="lead admin-hint">
-                Grant a trial, give complimentary access (₹0, Given by Admin, not revenue), or revoke the app. Paid checkout still goes through Razorpay.
+                Grant a trial, give complimentary access (₹0, Given by Admin, not revenue), revoke, or ban the app. Paid checkout still goes through Razorpay.
               </p>
+              <div className="admin-moderation-tools">
+                <input
+                  type="search"
+                  className="input"
+                  placeholder="Search name, email, city, org"
+                  value={peopleQuery}
+                  onChange={(e) => setPeopleQuery(e.target.value)}
+                  aria-label="Search people"
+                />
+              </div>
               <div className="trial-controls">
                 <label className="admin-toggle">
                   <input
@@ -847,7 +1336,7 @@ export function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {accounts.map((row) => (
+                    {visibleAccounts.map((row) => (
                       <tr key={row.id}>
                         <td>
                           {row.name}
@@ -865,7 +1354,13 @@ export function AdminDashboard() {
                           ) : null}
                         </td>
                         <td>
-                          <span className="admin-pill">{row.access.status}</span>
+                          <span className="admin-pill">{row.banned ? "banned" : row.access.status}</span>
+                          {row.banned && row.banReason ? (
+                            <>
+                              <br />
+                              <span className="meta">{row.banReason}</span>
+                            </>
+                          ) : null}
                         </td>
                         <td className="meta">
                           {row.access.modules.assessments ? "assessments " : ""}
@@ -900,13 +1395,22 @@ export function AdminDashboard() {
                           <button type="button" className="btn btn-ghost" onClick={() => void setAccess(row.id, "revoke")}>
                             Revoke
                           </button>
+                          {row.banned ? (
+                            <button type="button" className="btn btn-ghost" onClick={() => void setBanned(row.id, false)}>
+                              Unban
+                            </button>
+                          ) : (
+                            <button type="button" className="btn btn-ghost" onClick={() => void setBanned(row.id, true)}>
+                              Ban
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              {!accounts.length ? <p className="admin-empty">No customer accounts yet. Signups from the trial form appear here.</p> : null}
+              {!visibleAccounts.length ? <p className="admin-empty">{accounts.length ? "No people match that search." : "No customer accounts yet. Signups from the trial form appear here."}</p> : null}
             </>
           )}
         </section>
@@ -914,7 +1418,9 @@ export function AdminDashboard() {
 
       {tab === "billing" ? (
         <BillingModule
-          key={billingTick}
+          key={`${billingTick}-${billingView}`}
+          view={billingView}
+          onNavigate={(view) => goBilling(view)}
           accounts={accounts}
           ensureAccounts={() => {
             if (accounts === null) {
@@ -1014,15 +1520,17 @@ export function AdminDashboard() {
           )}
         </section>
       ) : null}
+        </div>
+      </div>
     </main>
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
+function Stat({ label, value, hint, raw }: { label: string; value: string; hint: string; raw?: number }) {
   return (
     <div className="admin-stat">
       <p className="meta">{label}</p>
-      <p className="num admin-big">{value}</p>
+      <p className="num admin-big">{raw != null ? <CountUp value={raw} format={(n) => fmt(Math.round(n))} /> : value}</p>
       <p className="meta">{hint}</p>
     </div>
   );
